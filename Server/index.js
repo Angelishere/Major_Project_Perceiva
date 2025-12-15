@@ -110,9 +110,55 @@ app.post("/register", async (req, res) => {
   }
 });
 
-app.post("/login",async (req,res)=>{
-  
-})
+app.post("/login", async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    // basic check
+    if (!username || !password) {
+      return res.status(400).json({ message: "Username and password required" });
+    }
+
+    // find user by username (or email if you want later)
+    const user = await User.findOne({ username });
+    if (!user) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    // compare password
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    // update last login
+    user.lastLogin = new Date();
+    await user.save();
+
+    // generate JWT
+    const token = jwt.sign(
+      { userId: user._id, username: user.username },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES || "1h" }
+    );
+
+    // response
+    res.status(200).json({
+      message: "Login successful",
+      token,
+      user: {
+        id: user._id,
+        username: user.username,
+        email: user.email,
+        lastLogin: user.lastLogin
+      }
+    });
+
+  } catch (error) {
+    console.error("Login error:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
 
 
 const port = process.env.PORT || 4000;
