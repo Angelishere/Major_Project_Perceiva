@@ -1,16 +1,34 @@
 // index.js
-require("dotenv").config();
-const express = require("express");
-const bodyParser = require("body-parser");
-const cors = require("cors");
-const { v4: uuidv4 } = require("uuid");
-const { generateToken04 } = require("./zegoToken");
+import bodyParser from "body-parser";
+import cors from "cors";
+import { v4 as uuidv4 } from "uuid";
+import { generateToken04 } from "./zegoToken.js";
+import jwt from "jsonwebtoken";
+
+
+import mongoose from "mongoose";
+import express from "express";
+import bcrypt from "bcryptjs";
+import dotenv from "dotenv";
+dotenv.config();
+
+
+import User from "./models/Users.model.js"
 
 const app = express();
-
-// Middlewares
+app.use(express.json());
 app.use(cors()); // allow all origins for dev; tighten in production
 app.use(bodyParser.json({ limit: "10kb" }));
+
+const MONGOURI= process.env.MONGOURI
+mongoose.connect(MONGOURI).then(
+  ()=>{
+    console.log("Connected to Mongodb successfully")
+  }
+).catch(
+  (Error)=>{console.error(Error)}
+)
+
 
 // Health
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
@@ -53,6 +71,49 @@ app.post("/api/zego/token", (req, res) => {
     return res.status(500).json({ error: "internal_error", details: err.message });
   }
 });
+
+app.post("/register", async (req, res) => {
+  try {
+    const { username, email, password } = req.body;
+
+    // basic presence check
+    if (!username || !email || !password) {
+      return res.status(400).json({ message: "All fields are required" });
+    }
+
+    // check if user already exists
+    const existingUser = await User.findOne({
+      $or: [{ username }, { email }]
+    });
+
+    if (existingUser) {
+      return res.status(409).json({ message: "User already exists" });
+    }
+
+    // hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // create user
+    await User.create({
+      username,
+      email,
+      password: hashedPassword,
+      lastLogin: null
+    });
+
+    res.status(201).json({ message: "User registered successfully" });
+    console.log(`Account created for username: "${username}"`);
+
+  } catch (error) {
+    console.error("Register error:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+});
+
+app.post("/login",async (req,res)=>{
+  
+})
+
 
 const port = process.env.PORT || 4000;
 app.listen(port, () => {
