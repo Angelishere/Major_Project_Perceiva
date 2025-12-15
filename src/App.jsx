@@ -6,6 +6,8 @@ import MedicalDetails from "./pages/MedicalDetails";
 import AllergyDetails from "./pages/AllergyDetails";
 import EmergencyDetails from "./pages/EmergencyDetails";
 import Success from "./pages/Success";
+import Video_Chat_sender from "./components/Video_Chat_sender";
+import Video_Chat from "./components/Video_Chat";
 
 function App() {
   const [formData, setFormData] = useState({
@@ -29,6 +31,8 @@ function App() {
         <Route path="/allergy" element={<AllergyDetails formData={formData} setFormData={setFormData} />} />
         <Route path="/emergency" element={<EmergencyDetails formData={formData} setFormData={setFormData} />} />
         <Route path="/success" element={<Success />} />
+        <Route path="/videosend" element={<Video_Chat_sender/>} />
+        <Route path="/videorec" element={<Video_Chat/>} />
       </Routes>
     </BrowserRouter>
   );
