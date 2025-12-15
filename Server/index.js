@@ -15,6 +15,7 @@ dotenv.config();
 
 import User from "./models/Users.model.js"
 
+
 const app = express();
 app.use(express.json());
 app.use(cors()); // allow all origins for dev; tighten in production
