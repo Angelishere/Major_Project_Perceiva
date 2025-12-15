@@ -2,7 +2,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ZegoExpressEngine } from "zego-express-engine-webrtc";
 
-const TOKEN_ENDPOINT = "http://localhost:4000/api/zego/token";
+const TOKEN_ENDPOINT = "https://major-project-perceiva.onrender.com/api/zego/token";
 const ROOM_ID = "glassRoom1";
 const STREAM_ID_PREFIX = "pi_sender_";
 

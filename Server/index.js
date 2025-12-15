@@ -74,10 +74,10 @@ app.post("/api/zego/token", (req, res) => {
 
 app.post("/register", async (req, res) => {
   try {
-    const { username, email, password } = req.body;
+    const { name, username, email, password } = req.body;
 
     // basic presence check
-    if (!username || !email || !password) {
+    if (!name|| !username || !email || !password) {
       return res.status(400).json({ message: "All fields are required" });
     }
 
@@ -95,6 +95,7 @@ app.post("/register", async (req, res) => {
 
     // create user
     await User.create({
+      name,
       username,
       email,
       password: hashedPassword,
