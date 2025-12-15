@@ -8,6 +8,8 @@ import EmergencyDetails from "./pages/EmergencyDetails";
 import Success from "./pages/Success";
 import Video_Chat_sender from "./components/Video_Chat_sender";
 import Video_Chat from "./components/Video_Chat";
+import Login from "./components/Login/Login";
+import Register from "./components/Register/Register";
 
 function App() {
   const [formData, setFormData] = useState({
@@ -33,6 +35,8 @@ function App() {
         <Route path="/success" element={<Success />} />
         <Route path="/videosend" element={<Video_Chat_sender/>} />
         <Route path="/videorec" element={<Video_Chat/>} />
+        <Route path="/login" element={<Login/>} />
+        <Route path="/register" element={<Register/>} />
       </Routes>
     </BrowserRouter>
   );
