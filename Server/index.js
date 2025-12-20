@@ -3,6 +3,7 @@ import bodyParser from "body-parser";
 import cors from "cors";
 import { v4 as uuidv4 } from "uuid";
 import { generateToken04 } from "./zegoToken.js";
+import callRoutes from "./routes/call.routes.js";
 import jwt from "jsonwebtoken";
 
 
@@ -30,7 +31,7 @@ mongoose.connect(MONGOURI).then(
   (Error)=>{console.error(Error)}
 )
 
-
+app.use("/api/call", callRoutes);
 // Health
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
 

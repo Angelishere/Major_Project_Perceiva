@@ -7,6 +7,8 @@ import Video_Chat from "./pages/Video_Call/Video_Chat";
 import Login from "./pages/Login/Login";
 import Register from "./pages/Register/Register";
 import ProtectedRoute from "./utils/ProtectedRoute";
+import CallPage from "./pages/Call/CallPage";
+import { CallProvider } from "./context/CallContext";
 
 function App() {
 
@@ -19,6 +21,13 @@ function App() {
           <Route path="/videosend" element={<Video_Chat_sender />} />
           <Route path="/videorec" element={<Video_Chat />} />
         </Route>
+        <Route path="/calls" element={
+          <ProtectedRoute>
+            <CallProvider>
+              <CallPage/>
+            </CallProvider>
+          </ProtectedRoute>
+        }/>
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
       </Routes>
