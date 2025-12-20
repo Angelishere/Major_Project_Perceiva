@@ -30,9 +30,10 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
       log("Initializing call...");
 
       // Get Zego token from backend
+      const targetId = targetUser?._id ?? targetUser?.id;
       const res = await api.post(
         "/api/call/get-room",
-        { targetUserId: targetUser._id }
+        { targetUserId: targetId }
       );
 
       const { appID, token, userID } = res.data;
@@ -51,6 +52,31 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
       });
 
       log("Logged into room: " + roomID);
+
+      // Fetch existing streams already in the room and play them
+      try {
+        const existing = await zg.getRoomStreamList(roomID);
+        if (Array.isArray(existing) && existing.length) {
+          log(`Initial streams: ${existing.map(s => s.streamID).join(', ')}`);
+          for (const s of existing) {
+            try {
+              const remote = await zg.startPlayingStream(s.streamID);
+              setRemoteStream(remote);
+              if (remoteVideoRef.current) {
+                remoteVideoRef.current.srcObject = remote;
+                await remoteVideoRef.current.play().catch((e) => log("Autoplay blocked: " + e.message));
+              }
+              log(`✅ Playing initial stream: ${s.streamID}`);
+            } catch (err) {
+              log(`Failed to play initial stream: ${err.message}`);
+            }
+          }
+        } else {
+          log("No initial streams; waiting for updates...");
+        }
+      } catch (e) {
+        log("getRoomStreamList failed: " + e.message);
+      }
 
       // Listen for remote stream
       zg.on("roomStreamUpdate", async (_roomID, updateType, streamList) => {
@@ -104,15 +130,13 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
         localVideoRef.current.muted = true;
         await localVideoRef.current.play().catch((e) => log("Local preview play blocked"));
       }
-
       // Publish with consistent stream ID based on userID
       const streamID = `stream_${userID}`;
       await zg.startPublishingStream(streamID, zegoStream);
       setPublishing(true);
       log(`✅ Publishing as: ${streamID}`);
-    } catch (error) {
-      log("Failed to start publishing: " + error.message);
-      console.error(error);
+    } catch (err) {
+      log("Publishing failed: " + err.message);
     }
   }
 
