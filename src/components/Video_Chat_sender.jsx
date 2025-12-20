@@ -1,12 +1,17 @@
 // Video_Chat_Sender.jsx
 import React, { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { ZegoExpressEngine } from "zego-express-engine-webrtc";
+import api from "../api/api";
 
 const TOKEN_ENDPOINT = "https://major-project-perceiva.onrender.com/api/zego/token";
 const ROOM_ID = "glassRoom1";
 const STREAM_ID_PREFIX = "pi_sender_";
+  
 
 export default function Video_Chat_sender({ tokenEndpoint = TOKEN_ENDPOINT }) {
+  const navigate = useNavigate();
+
   const [engine, setEngine] = useState(null);
   const [appID, setAppID] = useState(null);
   const [userID, setUserID] = useState(null);
@@ -154,7 +159,7 @@ export default function Video_Chat_sender({ tokenEndpoint = TOKEN_ENDPOINT }) {
     const zg = new ZegoExpressEngine(appId, "wss://wss.zegocloud.com/ws");
     setEngine(zg);
     setAppID(appId);
-    
+
     // Listen for SDK errors before login
     zg.on && zg.on("error", (code, msg) => {
       log("SDK Error: code=" + code + " msg=" + msg);
@@ -183,58 +188,38 @@ export default function Video_Chat_sender({ tokenEndpoint = TOKEN_ENDPOINT }) {
   async function fetchTokenAndLogin() {
     try {
       setIsLoggedIn(false);
-      log("Requesting token from " + tokenEndpoint);
-      const res = await fetch(tokenEndpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ roomID: ROOM_ID })
+      log("Requesting token from backend");
+
+      const res = await api.post("/api/zego/token", {
+        roomID: ROOM_ID,
       });
 
-      const body = await res.json().catch(() => null);
-      log("Token endpoint status: " + res.status + " body keys: " + (body ? Object.keys(body).join(",") : "null"));
+      const body = res.data;
 
-      if (!res.ok) {
-        const txt = body ? JSON.stringify(body) : await res.text().catch(() => "");
-        throw new Error("Token endpoint returned " + res.status + " body: " + txt);
-      }
-
-      if (!body || !("token" in body) || !body.appID || !body.userID) {
-        throw new Error("Token endpoint missing required fields. Received: " + JSON.stringify(body));
+      if (!body || !body.token || !body.appID || !body.userID) {
+        throw new Error("Invalid token response: " + JSON.stringify(body));
       }
 
       const tokenStr = String(body.token);
       setToken(tokenStr);
       setUserID(String(body.userID));
-      log("Got token & appID from server. userID=" + String(body.userID));
-      log("token typeof: " + (typeof tokenStr) + " token preview: " + tokenStr.slice(0, 80));
 
-      // initialize engine then login
       const zg = initializeEngine(Number(body.appID));
 
-      try {
-        log("Attempting loginRoom with userID: " + String(body.userID));
-        log("Token length: " + tokenStr.length + " appID: " + Number(body.appID) + " ROOM_ID: " + ROOM_ID);
-        // Zego Web SDK signature: loginRoom(roomID, token, user)
-        const loginPromise = zg.loginRoom(ROOM_ID, tokenStr, { userID: String(body.userID), userName: "sender" });
-        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("loginRoom timeout after 10s")), 10000));
-        const loginRes = await Promise.race([loginPromise, timeoutPromise]);
-        log("loginRoom result: " + JSON.stringify(loginRes || "ok"));
-        setIsLoggedIn(true);
-        setAppID(Number(body.appID));
-      } catch (loginErr) {
-        const errMsg = loginErr && (loginErr.message || JSON.stringify(loginErr));
-        log("loginRoom failed: " + errMsg);
-        console.error("loginRoom error object:", loginErr);
-        setIsLoggedIn(false);
-        throw loginErr;
-      }
+      await zg.loginRoom(
+        ROOM_ID,
+        tokenStr,
+        { userID: String(body.userID), userName: "sender" }
+      );
+
+      setIsLoggedIn(true);
     } catch (e) {
-      log("Token/login error: " + (e && (e.message || JSON.stringify(e))));
-      console.error(e);
+      log("Token/login error: " + (e.message || e));
       setIsLoggedIn(false);
       throw e;
     }
   }
+
 
   // start publish — reuse preview stream if present, but ensure login
   async function startLocalPreviewAndPublish() {
@@ -256,12 +241,12 @@ export default function Video_Chat_sender({ tokenEndpoint = TOKEN_ENDPOINT }) {
       }
 
       // Build stream configuration for Zego's createStream
-      const videoConstraint = selectedVideoId 
-        ? { deviceId: selectedVideoId, width: 640, height: 480, frameRate: 15 } 
+      const videoConstraint = selectedVideoId
+        ? { deviceId: selectedVideoId, width: 640, height: 480, frameRate: 15 }
         : { width: 640, height: 480, frameRate: 15 };
-      
-      const audioConstraint = selectedAudioId 
-        ? { deviceId: selectedAudioId } 
+
+      const audioConstraint = selectedAudioId
+        ? { deviceId: selectedAudioId }
         : true;
 
       log("Creating Zego stream with constraints: " + JSON.stringify({ video: videoConstraint, audio: audioConstraint }));
@@ -279,15 +264,15 @@ export default function Video_Chat_sender({ tokenEndpoint = TOKEN_ENDPOINT }) {
 
         // Store reference and attach to video preview
         localStreamRef.current = zegoStream;
-        
+
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = zegoStream;
           localVideoRef.current.muted = true;
-          try { 
-            await localVideoRef.current.play(); 
+          try {
+            await localVideoRef.current.play();
             log("Preview playing");
-          } catch (e) { 
-            log("preview play() failed: " + (e.message || e)); 
+          } catch (e) {
+            log("preview play() failed: " + (e.message || e));
           }
         }
 
@@ -298,7 +283,7 @@ export default function Video_Chat_sender({ tokenEndpoint = TOKEN_ENDPOINT }) {
       } catch (streamErr) {
         log("Failed to create/publish stream: " + (streamErr.message || JSON.stringify(streamErr)));
         console.error("Stream creation/publish error:", streamErr);
-        
+
         if (String(streamErr).toLowerCase().includes("not login") || String(streamErr).toLowerCase().includes("not logged")) {
           alert("Publish failed: SDK not logged in. Please click 'Fetch Token & Login' again, wait for login success, then Start Publish.");
         } else {
@@ -319,7 +304,7 @@ export default function Video_Chat_sender({ tokenEndpoint = TOKEN_ENDPOINT }) {
         setPublishing(false);
         log("Stopped publishing");
       }
-      
+
       // Destroy the Zego stream and stop preview
       if (localStreamRef.current) {
         if (engine) {
@@ -332,7 +317,7 @@ export default function Video_Chat_sender({ tokenEndpoint = TOKEN_ENDPOINT }) {
         }
         localStreamRef.current = null;
       }
-      
+
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = null;
       }
