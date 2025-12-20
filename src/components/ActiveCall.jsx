@@ -7,6 +7,7 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
   const [publishing, setPublishing] = useState(false);
   const [remoteStream, setRemoteStream] = useState(null);
   const [logs, setLogs] = useState([]);
+  const [myUserID, setMyUserID] = useState(null);
   
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
@@ -31,14 +32,12 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
       // Get Zego token from backend
       const res = await api.post(
         "/api/call/get-room",
-        { targetUserId: targetUser._id },
-        {
-          headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
-        }
+        { targetUserId: targetUser._id }
       );
 
       const { appID, token, userID } = res.data;
-      log("Got Zego token, logging in...");
+      setMyUserID(userID);
+      log(`Got Zego token for userID: ${userID}`);
 
       // Initialize Zego
       const zg = new ZegoExpressEngine(appID, "wss://wss.zegocloud.com/ws");
@@ -48,7 +47,7 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
       // Login to room
       await zg.loginRoom(roomID, token, {
         userID: userID,
-        userName: "caller",
+        userName: "user",
       });
 
       log("Logged into room: " + roomID);
@@ -57,26 +56,36 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
       zg.on("roomStreamUpdate", async (_roomID, updateType, streamList) => {
         if (updateType === "ADD") {
           for (const stream of streamList) {
-            log("Remote user joined: " + stream.streamID);
-            const remote = await zg.startPlayingStream(stream.streamID);
-            setRemoteStream(remote);
-            if (remoteVideoRef.current) {
-              remoteVideoRef.current.srcObject = remote;
-              await remoteVideoRef.current.play().catch((e) => log("Autoplay blocked"));
+            log(`Remote stream detected: ${stream.streamID}`);
+            
+            // Play the remote stream
+            try {
+              const remote = await zg.startPlayingStream(stream.streamID);
+              setRemoteStream(remote);
+              if (remoteVideoRef.current) {
+                remoteVideoRef.current.srcObject = remote;
+                await remoteVideoRef.current.play().catch((e) => log("Autoplay blocked: " + e.message));
+              }
+              log(`✅ Playing remote stream: ${stream.streamID}`);
+            } catch (err) {
+              log(`Failed to play stream: ${err.message}`);
             }
           }
+        } else if (updateType === "DELETE") {
+          log(`Remote stream removed`);
+          setRemoteStream(null);
         }
       });
 
       // Auto-start publishing
-      startPublishing(zg);
+      startPublishing(zg, userID);
     } catch (error) {
       log("Call init failed: " + error.message);
       console.error(error);
     }
   }
 
-  async function startPublishing(zg) {
+  async function startPublishing(zg, userID) {
     try {
       log("Starting local stream...");
 
@@ -96,10 +105,11 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
         await localVideoRef.current.play().catch((e) => log("Local preview play blocked"));
       }
 
-      // Publish
-      await zg.startPublishingStream(`call_${Date.now()}`, zegoStream);
+      // Publish with consistent stream ID based on userID
+      const streamID = `stream_${userID}`;
+      await zg.startPublishingStream(streamID, zegoStream);
       setPublishing(true);
-      log("✅ Publishing to Zego");
+      log(`✅ Publishing as: ${streamID}`);
     } catch (error) {
       log("Failed to start publishing: " + error.message);
       console.error(error);
@@ -109,13 +119,7 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
   async function handleEndCall() {
     try {
       // End call on backend
-      await api.post(
-        "/api/call/end-call",
-        { roomID },
-        {
-          headers: { Authorization: `Bearer ${localStorage.getItem("authToken")}` },
-        }
-      );
+      await api.post("/api/call/end-call", { roomID });
 
       cleanup();
       onEndCall();
@@ -129,13 +133,14 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
   function cleanup() {
     try {
       if (engineRef.current) {
-        if (publishing) {
-          engineRef.current.stopPublishingStream().catch((e) => console.warn(e));
+        if (publishing && myUserID) {
+          const streamID = `stream_${myUserID}`;
+          engineRef.current.stopPublishingStream(streamID).catch((e) => console.warn(e));
         }
         if (localStreamRef.current) {
           engineRef.current.destroyStream(localStreamRef.current).catch((e) => console.warn(e));
         }
-        engineRef.current.destroy();
+        engineRef.current.logoutRoom(roomID).catch((e) => console.warn(e));
         engineRef.current = null;
       }
 
@@ -157,7 +162,7 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
         {/* Local Video */}
         <div>
-          <h4>You</h4>
+          <h4>You {myUserID && `(${myUserID.slice(0, 8)}...)`}</h4>
           <video
             ref={localVideoRef}
             autoPlay
@@ -173,7 +178,7 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
         </div>
 
         {/* Remote Video */}
-        <div>
+        <div style={{ position: "relative" }}>
           <h4>{targetUser?.username}</h4>
           <video
             ref={remoteVideoRef}
@@ -195,6 +200,9 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
                 transform: "translate(-50%, -50%)",
                 color: "white",
                 fontSize: 14,
+                background: "rgba(0,0,0,0.7)",
+                padding: "10px 20px",
+                borderRadius: 8,
               }}
             >
               Waiting for {targetUser?.username} to join...
@@ -223,7 +231,7 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
 
       {/* Logs */}
       <div style={{ marginTop: 20 }}>
-        <h4>Call Logs</h4>
+        <h4>Call Logs (Debug)</h4>
         <div
           style={{
             background: "#111",
