@@ -10,6 +10,7 @@ import Video_Chat_sender from "./components/Video_Chat_sender";
 import Video_Chat from "./components/Video_Chat";
 import Login from "./components/Login/Login";
 import Register from "./components/Register/Register";
+import ProtectedRoute from "./utils/ProtectedRoute";
 
 function App() {
   const [formData, setFormData] = useState({
@@ -33,10 +34,12 @@ function App() {
         <Route path="/allergy" element={<AllergyDetails formData={formData} setFormData={setFormData} />} />
         <Route path="/emergency" element={<EmergencyDetails formData={formData} setFormData={setFormData} />} />
         <Route path="/success" element={<Success />} />
-        <Route path="/videosend" element={<Video_Chat_sender/>} />
-        <Route path="/videorec" element={<Video_Chat/>} />
-        <Route path="/login" element={<Login/>} />
-        <Route path="/register" element={<Register/>} />
+        <Route element={<ProtectedRoute/>}>
+          <Route path="/videosend" element={<Video_Chat_sender />} />
+          <Route path="/videorec" element={<Video_Chat />} />
+        </Route>
+        <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
       </Routes>
     </BrowserRouter>
   );

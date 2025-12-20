@@ -1,0 +1,133 @@
+/* Page background */
+.page-container {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  font-family: "Segoe UI", Arial, sans-serif;
+}
+
+/* Login card – NO BORDER */
+.login-section {
+  background: #ffffff;
+  width: 100%;
+  max-width: 420px;
+  padding: 35px 30px;
+  border-radius: 18px;
+
+  /* Removed border completely */
+  box-shadow: 0 25px 45px rgba(0, 0, 0, 0.22);
+
+  animation: fadeIn 0.6s ease-in-out;
+}
+
+/* Fade animation */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Header */
+.login-header {
+  text-align: center;
+  margin-bottom: 25px;
+}
+
+.login-header h1 {
+  font-size: 30px;
+  margin-bottom: 6px;
+  color: #2d3748;
+}
+
+.login-header p {
+  font-size: 15px;
+  color: #718096;
+}
+
+/* Form */
+.login-form {
+  margin-bottom: 20px;
+}
+
+.form-group {
+  margin-bottom: 18px;
+}
+
+label {
+  display: block;
+  margin-bottom: 6px;
+  font-weight: 600;
+  color: #2d3748;
+}
+
+input {
+  width: 90%;               /* reduced width */
+  padding: 12px 14px;
+  font-size: 16px;
+  border-radius: 10px;
+  border: 1px solid #cbd5e0;
+  display: block;
+  margin: 0 auto;           /* centers input */
+  transition: border 0.2s, box-shadow 0.2s;
+}
+
+input::placeholder {
+  color: #a0aec0;
+}
+
+input:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.25);
+}
+
+/* Button */
+.login-button {
+  width: 100%;
+  padding: 14px;
+  font-size: 18px;
+  border-radius: 12px;
+  border: none;
+
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: #ffffff;
+  cursor: pointer;
+  margin-top: 10px;
+
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.login-button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+}
+
+/* Footer */
+.login-footer {
+  text-align: center;
+  font-size: 14px;
+  margin-top: 15px;
+}
+
+.login-footer a {
+  color: #667eea;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.login-footer a:hover {
+  text-decoration: underline;
+}
+
+/* Screen-reader only */
+.sr-only {
+  position: absolute;
+  left: -10000px;
+}

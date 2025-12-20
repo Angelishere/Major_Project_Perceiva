@@ -1,12 +1,16 @@
 // Video_Chat_Sender.jsx
 import React, { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { ZegoExpressEngine } from "zego-express-engine-webrtc";
 
 const TOKEN_ENDPOINT = "https://major-project-perceiva.onrender.com/api/zego/token";
 const ROOM_ID = "glassRoom1";
 const STREAM_ID_PREFIX = "pi_sender_";
 
+
 export default function Video_Chat_sender({ tokenEndpoint = TOKEN_ENDPOINT }) {
+  const navigate = useNavigate();
+  
   const [engine, setEngine] = useState(null);
   const [appID, setAppID] = useState(null);
   const [userID, setUserID] = useState(null);
