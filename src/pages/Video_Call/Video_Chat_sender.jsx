@@ -2,7 +2,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ZegoExpressEngine } from "zego-express-engine-webrtc";
-import api from "../api/api";
+import api from "../../api/api";
 
 const TOKEN_ENDPOINT = "https://major-project-perceiva.onrender.com/api/zego/token";
 const ROOM_ID = "glassRoom1";
