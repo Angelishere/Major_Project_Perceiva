@@ -1,5 +1,4 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
-import { useState } from "react";
 
 import Home from "./pages/Home";
 import Video_Chat_sender from "./pages/Video_Call/Video_Chat_sender";
@@ -9,11 +8,13 @@ import Register from "./pages/Register/Register";
 import ProtectedRoute from "./utils/ProtectedRoute";
 import CallPage from "./pages/Call/CallPage";
 import { CallProvider } from "./context/CallContext";
+import Navbar from "./components/Navbar/Navbar";
 
 function App() {
 
   return (
     <BrowserRouter>
+      <Navbar />
       <Routes>
 
         <Route element={<ProtectedRoute />}>
