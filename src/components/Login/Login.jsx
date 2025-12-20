@@ -2,24 +2,26 @@ import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import "./Login.css";
 import axios from "axios";
+import api from "../../api/api";
 
 const Login = () => {
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
   const [password, setpassword] = useState("");
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
-    axios.post("https://major-project-perceiva.onrender.com/login", { username: username, password: password }, {
-      headers: {
-        "Content-Type": "application/json"
-      }
-    }).then((e) => {
-      console.log(e.data.message)
-      sessionStorage.setItem("token",e.data.token)
-      alert("Login Succesfull")
+    try {
+      const res = await api.post("/login",{
+        username,password,
+      })
+      localStorage.setItem("token",res.data.token);
+      navigate("/videosend");
+    } catch (error) {
+      console.log(error);
+      alert("Invalid credentials");
       
-    }).catch((e) => { console.log(e) })
+    }
   }
   return (
     <main className="page-container">
@@ -30,7 +32,7 @@ const Login = () => {
           <p>Sign in to your account</p>
         </header>
 
-        <form className="login-form">
+        <form className="login-form" onSubmit={handleLogin}>
 
           <legend className="sr-only">User Login Form</legend>
 
@@ -62,7 +64,7 @@ const Login = () => {
             />
           </div>
 
-          <button type="submit" className="login-button" onClick={handleLogin}>
+          <button type="submit" className="login-button">
             Login
           </button>
 
