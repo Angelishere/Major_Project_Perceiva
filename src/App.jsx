@@ -21,13 +21,12 @@ function App() {
           <Route path="/videosend" element={<Video_Chat_sender />} />
           <Route path="/videorec" element={<Video_Chat />} />
         </Route>
-        <Route path="/calls" element={
-          <ProtectedRoute>
+        <Route element={<ProtectedRoute />}>
+          <Route path="/calls" element={
             <CallProvider>
-              <CallPage/>
+              <CallPage />
             </CallProvider>
-          </ProtectedRoute>
-        }/>
+          } /></Route>
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
       </Routes>

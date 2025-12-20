@@ -33,7 +33,7 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
         "/api/call/get-room",
         { targetUserId: targetUser._id },
         {
-          headers: { Authorization: `Bearer ${localStorage.getItem("authToken")}` },
+          headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
         }
       );
 

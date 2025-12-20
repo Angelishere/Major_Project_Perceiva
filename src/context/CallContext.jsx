@@ -15,7 +15,7 @@ export function CallProvider({ children }) {
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
-        const token = localStorage.getItem("authToken");
+        const token = localStorage.getItem("token");
         if (!token) return;
 
         const res = await api.get("/api/call/check-calls", {

@@ -12,7 +12,7 @@ export default function UserListCard({ onCallUser }) {
   async function fetchUsers() {
     try {
       const res = await api.get("/api/call/users", {
-        headers: { Authorization: `Bearer ${localStorage.getItem("authToken")}` },
+        headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
       });
       setUsers(res.data.users || []);
     } catch (error) {

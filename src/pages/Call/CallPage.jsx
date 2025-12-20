@@ -4,6 +4,7 @@ import UserListCard from "../../components/UserListCard";
 import ActiveCall from "../../components/ActiveCall";
 import IncomingCallModal from "../../components/IncomingCallModal";
 import api from "../../api/api";
+import Navbar from "../../components/Navbar/Navbar";
 
 function generateRoomId(userId1, userId2) {
   const ids = [userId1, userId2].sort();
@@ -17,7 +18,8 @@ export default function CallPage() {
   async function handleCallUser(user) {
     try {
       // Get current user ID from JWT
-      const token = localStorage.getItem("authToken");
+      const token = localStorage.getItem("token");
+      if (!token) { alert("Not authenticated"); return; }
       const payload = JSON.parse(atob(token.split(".")[1]));
       const currentUserId = payload.userId;
 
@@ -93,7 +95,10 @@ export default function CallPage() {
   }
 
   return (
-    <div style={{ padding: 20, maxWidth: 800, margin: "0 auto" }}>
+    
+    <div>
+      <Navbar/>
+      <div style={{ padding: 20, maxWidth: 800, margin: "0 auto" }}>
       <h1>Video Calls</h1>
       <UserListCard onCallUser={handleCallUser} />
 
@@ -105,6 +110,7 @@ export default function CallPage() {
           onReject={handleRejectCall}
         />
       )}
+    </div>
     </div>
   );
 }
