@@ -16,7 +16,6 @@ const Login = () => {
         username,password,
       })
       localStorage.setItem("token",res.data.token);
-      navigate("/videosend");
     } catch (error) {
       console.log(error);
       alert("Invalid credentials");
