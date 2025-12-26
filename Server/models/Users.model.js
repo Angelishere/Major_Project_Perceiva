@@ -24,6 +24,11 @@ const UserSchema = new mongoose.Schema(
       type: String,
       required: true
     },
+        role: {
+      type: String,
+      enum: ["blind", "volunteer"],   // 🔐 Restriction
+      required: true
+    },
     lastLogin: {
       type: Date,
       default: null
