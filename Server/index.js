@@ -22,13 +22,13 @@ app.use(express.json());
 app.use(cors()); // allow all origins for dev; tighten in production
 app.use(bodyParser.json({ limit: "10kb" }));
 
-const MONGOURI= process.env.MONGOURI
+const MONGOURI = process.env.MONGOURI
 mongoose.connect(MONGOURI).then(
-  ()=>{
+  () => {
     console.log("Connected to Mongodb successfully")
   }
 ).catch(
-  (Error)=>{console.error(Error)}
+  (Error) => { console.error(Error) }
 )
 
 app.use("/api/call", callRoutes);
@@ -51,7 +51,7 @@ app.post("/api/zego/token", (req, res) => {
 
     const token = generateToken04(appID, userID, serverSecret, expire);
     const tokenStr = token.toString ? token.toString() : String(token);
-    
+
     console.log("Token generated:", {
       appID,
       userID,
@@ -76,11 +76,15 @@ app.post("/api/zego/token", (req, res) => {
 
 app.post("/register", async (req, res) => {
   try {
-    const { name, username, email, password } = req.body;
+    const { name, username, email, password, role } = req.body;
 
     // basic presence check
-    if (!name|| !username || !email || !password) {
+    if (!name || !username || !email || !password || !role) {
       return res.status(400).json({ message: "All fields are required" });
+    }
+    const allowedRoles = ["blind", "volunteer"];
+    if (!allowedRoles.includes(role)) {
+      return res.status(400).json({ message: "Invalid role" });
     }
 
     // check if user already exists
@@ -101,6 +105,7 @@ app.post("/register", async (req, res) => {
       username,
       email,
       password: hashedPassword,
+      role,
       lastLogin: null
     });
 
