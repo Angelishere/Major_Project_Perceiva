@@ -145,7 +145,7 @@ app.post("/login", async (req, res) => {
 
     // generate JWT
     const token = jwt.sign(
-      { userId: user._id, username: user.username },
+      { userId: user._id, username: user.username, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES || "1h" }
     );
@@ -158,6 +158,7 @@ app.post("/login", async (req, res) => {
         id: user._id,
         username: user.username,
         email: user.email,
+        role : user.role,
         lastLogin: user.lastLogin
       }
     });
