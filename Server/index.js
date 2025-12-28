@@ -15,7 +15,8 @@ dotenv.config();
 
 
 import User from "./models/Users.model.js"
-
+import BlindProfile from "./models/BlindProfile.model.js";
+import VolunteerProfile from "./models/VolunteerProfile.model.js";
 
 
 const app = express();
@@ -110,6 +111,23 @@ app.post("/register", async (req, res) => {
       lastLogin: null
     });
 
+    if (role === "blind") {
+      await BlindProfile.create({
+        user: user._id
+      });
+      console.log(`Blind Profile Create for  "${username}"`);
+
+    }
+
+    if (role === "volunteer") {
+      await VolunteerProfile.create({
+        user: user._id,
+        consentGiven: false   // force explicit consent later
+      });
+      console.log(`Volunteer Profile Create for  "${username}"`);
+
+    }
+
     res.status(201).json({ message: "User registered successfully" });
     console.log(`Account created for username: "${username}"`);
 
@@ -159,7 +177,7 @@ app.post("/login", async (req, res) => {
         id: user._id,
         username: user.username,
         email: user.email,
-        role : user.role,
+        role: user.role,
         lastLogin: user.lastLogin
       }
     });

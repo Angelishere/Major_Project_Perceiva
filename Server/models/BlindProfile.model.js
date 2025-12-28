@@ -30,4 +30,6 @@ const BlindProfileSchema = new mongoose.Schema(
         }
     },
     { timestamps: true }
-)
+);
+
+export default mongoose.model("BlindProfile", BlindProfileSchema);
