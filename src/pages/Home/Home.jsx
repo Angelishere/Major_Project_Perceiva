@@ -6,7 +6,6 @@ export default function Home() {
     <div className="container">
       <h2>Welcome to Perceiva</h2>
       <p>Smart Allergy Recommendation System</p>
-      <button onClick={() => nav("/medical")}>Start</button>
     </div>
   );
 }
