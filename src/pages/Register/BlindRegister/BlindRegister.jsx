@@ -1,8 +1,51 @@
 import React from 'react'
 import styles from "./BlindRegister.module.css"
+import api from "../../../api/api.js"
+import { useNavigate } from 'react-router-dom'
 
 const BlindRegister = () => {
-  return (
+  const navigate = useNavigate();
+
+  const [medicalConditions, setMedicalConditions] = useState("");
+  const [allergies, setAllergies] = useState("");
+  const [dietaryPreferences, setDietaryPreferences] = useState("");
+  const [language, setLanguage] = useState("en");
+  const [audioSpeed, setAudioSpeed] = useState("1.0");
+
+  const handleSubmit = async (e) => {
+  e.preventDefault();
+
+  try {
+    await api.put("/api/profile", {
+      medicalConditions: medicalConditions
+        .split(",")
+        .map((i) => i.trim())
+        .filter(Boolean),
+
+      allergies: allergies
+        .split(",")
+        .map((i) => i.trim())
+        .filter(Boolean),
+
+      dietaryPreferences: dietaryPreferences
+        .split(",")
+        .map((i) => i.trim())
+        .filter(Boolean),
+
+      language,
+      audioSpeed: Number(audioSpeed),
+    });
+
+    alert("Profile saved successfully");
+    navigate("/blind/home");
+  } catch (err) {
+    console.error(err);
+    alert("Failed to save profile");
+  }
+};
+
+
+   return (
     <main className={styles.pageContainer}>
       <section className={styles.loginSection}>
 
@@ -11,7 +54,7 @@ const BlindRegister = () => {
           <p>Personalize your Perceiva experience</p>
         </header>
 
-        <form className={styles.loginForm}>
+        <form className={styles.loginForm} onSubmit={handleSubmit}>
 
           {/* Medical Conditions */}
           <div className={styles.formGroup}>
@@ -19,6 +62,8 @@ const BlindRegister = () => {
             <input
               type="text"
               placeholder="e.g. Diabetes, BP"
+              value={medicalConditions}
+              onChange={(e)=>{setMedicalConditions(e.target.value)}}
             />
           </div>
 
@@ -28,6 +73,8 @@ const BlindRegister = () => {
             <input
               type="text"
               placeholder="e.g. Nuts, Milk"
+              value={allergies}
+              onChange={(e)=>{setAllergies(e.target.value)}}
             />
           </div>
 
@@ -37,13 +84,15 @@ const BlindRegister = () => {
             <input
               type="text"
               placeholder="e.g. Vegetarian, Low Sugar"
+              value={dietaryPreferences}
+              onChange={(e)=>{setDietaryPreferences(e.target.value)}}
             />
           </div>
 
           {/* Preferred Language */}
           <div className={styles.formGroup}>
             <label>Preferred Language</label>
-            <select>
+            <select value={language} onChange={(e)=>{e.target.value}}>
               <option value="en">English</option>
               <option value="hi">Hindi</option>
               <option value="ml">Malayalam</option>
@@ -53,7 +102,7 @@ const BlindRegister = () => {
           {/* Audio Speed */}
           <div className={styles.formGroup}>
             <label>Audio Speed</label>
-            <select>
+            <select value={audioSpeed} onChange={(e) => setAudioSpeed(e.target.value)} >
               <option value="0.8">Slow</option>
               <option value="1.0">Normal</option>
               <option value="1.2">Fast</option>

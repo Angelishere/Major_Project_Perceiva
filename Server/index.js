@@ -33,6 +33,25 @@ mongoose.connect(MONGOURI).then(
   (Error) => { console.error(Error) }
 )
 
+const authMiddleware = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ message: "No token provided" });
+  }
+
+  const token = authHeader.split(" ")[1];
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded; // { userId, role, username }
+    next();
+  } catch (err) {
+    return res.status(401).json({ message: "Invalid token" });
+  }
+};
+
+
 app.use("/api/call", callRoutes);
 // Health
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
@@ -194,21 +213,58 @@ app.post("/login", async (req, res) => {
   }
 });
 
-app.post("/registerBlind",(req,res)=>{
+app.get("/api/profile", authMiddleware, async (req, res) => {
   try {
-    
-  } catch (error) {
-    
-  }
-})
+    const { userId, role } = req.user;
 
-app.post("registerVolunteer", (req,res)=>{
-  try {
-    
+    if (role === "blind") {
+      const profile = await BlindProfile.findOne({ user: userId });
+      return res.json(profile);
+    }
+
+    if (role === "volunteer") {
+      const profile = await VolunteerProfile.findOne({ user: userId });
+      return res.json(profile);
+    }
+
+    return res.status(400).json({ message: "Invalid role" });
   } catch (error) {
-    
+    console.error("Get profile error:", error);
+    res.status(500).json({ message: "Server error" });
   }
-})
+});
+
+app.put("/api/profile", authMiddleware, async (req, res) => {
+  try {
+    const { userId, role } = req.user;
+    const updates = req.body;
+
+    if (role === "blind") {
+      const updatedProfile = await BlindProfile.findOneAndUpdate(
+        { user: userId },
+        updates,
+        { new: true, runValidators: true }
+      );
+      return res.json(updatedProfile);
+    }
+
+    if (role === "volunteer") {
+      const updatedProfile = await VolunteerProfile.findOneAndUpdate(
+        { user: userId },
+        updates,
+        { new: true, runValidators: true }
+      );
+      return res.json(updatedProfile);
+    }
+
+    return res.status(400).json({ message: "Invalid role" });
+  } catch (error) {
+    console.error("Update profile error:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+
 
 
 const port = process.env.PORT || 4000;
