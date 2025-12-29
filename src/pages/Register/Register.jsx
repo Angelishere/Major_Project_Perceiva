@@ -15,15 +15,20 @@ const Register = () => {
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [username, setUsername] = useState("");
+    const [role, setRole] = useState("blind");
 
     const handleSubmit = (e) => {
-          e.preventDefault();   // VERY IMPORTANT
+        e.preventDefault();
+        console.log(role)   
 
-        axios.post("https://major-project-perceiva.onrender.com/register",{name:name,email:email,password:password,username:username},{headers:{
-                  "Content-Type": "application/json"
-        }}).then((e) => {
-            if(e.data.message=="User registered successfully"){
-                navigate('/login')
+        axios.post("https://major-project-perceiva.onrender.com/register", { name: name, email: email, password: password, username: username, role: role }, {
+            headers: {
+                "Content-Type": "application/json"
+            }
+        }).then((e) => {
+            if (e.data.message == "User registered successfully") {
+                localStorage.setItem("token", e.data.token);
+                navigate('/addDetails')
             }
         }).catch((Error) => {
             console.log(Error)
@@ -68,7 +73,7 @@ const Register = () => {
                             }}
                         />
                     </div>
-                   
+
 
                     <div className="form-group">
                         <label htmlFor="email">Email Address</label>
@@ -96,6 +101,13 @@ const Register = () => {
                                 setPassword(e.target.value)
                             }}
                         />
+                    </div>
+                    <div className="form-group">
+                        <label>User Type</label>
+                        <select required value={role} onChange={(e)=>{setRole(e.target.value)}}>
+                            <option value="blind" >Blind</option>
+                            <option value="volunteer" >Volunteer</option>
+                        </select>
                     </div>
 
                     <button type="button" className="login-button" onClick={handleSubmit}>

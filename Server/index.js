@@ -194,6 +194,22 @@ app.post("/login", async (req, res) => {
   }
 });
 
+app.post("/registerBlind",(req,res)=>{
+  try {
+    
+  } catch (error) {
+    
+  }
+})
+
+app.post("registerVolunteer", (req,res)=>{
+  try {
+    
+  } catch (error) {
+    
+  }
+})
+
 
 const port = process.env.PORT || 4000;
 app.listen(port, () => {
