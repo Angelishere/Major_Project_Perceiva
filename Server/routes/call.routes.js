@@ -24,7 +24,7 @@ router.get("/users", authenticateToken, async (req, res) => {
   try {
     const users = await User.find(
       { _id: { $ne: req.user.userId } }, // Exclude current user
-      "username email _id"
+      "username email _id role"
     );
     res.json({ users });
   } catch (error) {
@@ -98,6 +98,48 @@ router.post("/initiate-call", authenticateToken, async (req, res) => {
   }
 });
 
+// Request available volunteer (atomic lock)
+router.post("/request-volunteer", authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== "blind") {
+      return res.status(403).json({ message: "Only blind users allowed" });
+    }
+
+    const volunteer = await VolunteerProfile.findOneAndUpdate(
+      { isAvailable: true, consentGiven: true },
+      { isAvailable: false },
+      { new: true }
+    ).populate("user", "username email _id");
+
+    if (!volunteer) {
+      return res.status(404).json({ message: "No volunteers available" });
+    }
+
+    const blindId = req.user.userId;
+    const volunteerId = volunteer.user._id.toString();
+    const roomID = generateRoomId(blindId, volunteerId);
+
+    activeCalls.set(roomID, {
+      caller: blindId,
+      callee: volunteerId,
+      status: "ringing",
+      timestamp: Date.now(),
+    });
+
+    res.json({
+      success: true,
+      roomID,
+      volunteer: {
+        _id: volunteerId,
+        username: volunteer.user.username,
+        email: volunteer.user.email,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Check for incoming calls (polling endpoint)
 router.get("/check-calls", authenticateToken, async (req, res) => {
   try {
@@ -148,6 +190,16 @@ router.post("/answer-call", authenticateToken, async (req, res) => {
 router.post("/end-call", authenticateToken, async (req, res) => {
   try {
     const { roomID } = req.body;
+    const call = activeCalls.get(roomID);
+
+    if (call) {
+      // Free the volunteer
+      await VolunteerProfile.findOneAndUpdate(
+        { user: call.callee },
+        { isAvailable: true }
+      );
+    }
+
     activeCalls.delete(roomID);
     res.json({ success: true, message: "Call ended" });
   } catch (error) {

@@ -1,60 +1,50 @@
 import React, { useState } from "react";
 import { useCall } from "../../context/CallContext";
-import UserListCard from "../../components/UserListCard";
 import ActiveCall from "../../components/ActiveCall";
 import IncomingCallModal from "../../components/IncomingCallModal";
 import api from "../../api/api";
 import Navbar from "../../components/Navbar/Navbar";
 
-function generateRoomId(userId1, userId2) {
-  const ids = [userId1, userId2].sort();
-  return `call_${ids[0]}_${ids[1]}`;
-}
-
 export default function CallPage() {
   const { incomingCalls, activeCall, setActiveCall } = useCall();
   const [selectedUser, setSelectedUser] = useState(null);
+  const [calling, setCalling] = useState(false);
 
-  async function handleCallUser(user) {
+  async function handleRequestVolunteer() {
     try {
-      // Get current user ID from JWT
+      setCalling(true);
       const token = localStorage.getItem("token");
-      if (!token) { alert("Not authenticated"); return; }
-      const payload = JSON.parse(atob(token.split(".")[1]));
-      const currentUserId = payload.userId;
+      if (!token) { 
+        alert("Not authenticated"); 
+        setCalling(false);
+        return; 
+      }
 
-      const roomID = generateRoomId(currentUserId, user._id);
-
-      // Initiate call on backend
-      await api.post(
-        "/api/call/initiate-call",
-        { targetUserId: user._id },
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
+      const res = await api.post(
+        "/api/call/request-volunteer",
+        {},
+        { headers: { Authorization: `Bearer ${token}` } }
       );
 
-      // Start active call
-      setActiveCall({ user, roomID });
-      setSelectedUser(user);
+      const { volunteer, roomID } = res.data;
+      setActiveCall({ user: volunteer, roomID });
+      setSelectedUser(volunteer);
     } catch (error) {
-      console.error("Failed to initiate call:", error);
-      alert("Failed to start call");
+      console.error("Failed to request volunteer:", error);
+      alert(error.response?.data?.message || "Failed to connect with volunteer");
+      setCalling(false);
     }
   }
 
   async function handleAnswerCall(call) {
     try {
-      // Answer call on backend
+      const token = localStorage.getItem("token");
       await api.post(
         "/api/call/answer-call",
         { roomID: call.roomID },
-        {
-          headers: { Authorization: `Bearer ${localStorage.getItem("authToken")}` },
-        }
+        { headers: { Authorization: `Bearer ${token}` } }
       );
 
-      // Start active call
       setActiveCall({ user: call.caller, roomID: call.roomID });
       setSelectedUser(call.caller);
     } catch (error) {
@@ -64,12 +54,11 @@ export default function CallPage() {
 
   async function handleRejectCall(call) {
     try {
+      const token = localStorage.getItem("token");
       await api.post(
         "/api/call/end-call",
         { roomID: call.roomID },
-        {
-          headers: { Authorization: `Bearer ${localStorage.getItem("authToken")}` },
-        }
+        { headers: { Authorization: `Bearer ${token}` } }
       );
     } catch (error) {
       console.error("Failed to reject call:", error);
@@ -79,10 +68,10 @@ export default function CallPage() {
   function handleEndCall() {
     setActiveCall(null);
     setSelectedUser(null);
+    setCalling(false);
   }
 
-  // Show incoming call modal
-  const currentIncomingCall = incomingCalls[0]; // Show first call
+  const currentIncomingCall = incomingCalls[0];
 
   if (activeCall && selectedUser) {
     return (
@@ -95,21 +84,36 @@ export default function CallPage() {
   }
 
   return (
-    
     <div>
+      <Navbar />
       <div style={{ padding: 20, maxWidth: 800, margin: "0 auto" }}>
-      <h1>Video Calls</h1>
-      <UserListCard onCallUser={handleCallUser} />
+        <h1>Video Calls</h1>
+        
+        <button
+          onClick={handleRequestVolunteer}
+          disabled={calling || activeCall}
+          style={{
+            padding: "12px 24px",
+            fontSize: 16,
+            fontWeight: 600,
+            background: calling ? "#ccc" : "#28a745",
+            color: "white",
+            border: "none",
+            borderRadius: 8,
+            cursor: calling ? "not-allowed" : "pointer",
+          }}
+        >
+          {calling ? "⏳ Connecting..." : "📞 Call Volunteer"}
+        </button>
 
-      {/* Incoming call notification */}
-      {currentIncomingCall && (
-        <IncomingCallModal
-          call={currentIncomingCall}
-          onAnswer={handleAnswerCall}
-          onReject={handleRejectCall}
-        />
-      )}
-    </div>
+        {currentIncomingCall && (
+          <IncomingCallModal
+            call={currentIncomingCall}
+            onAnswer={handleAnswerCall}
+            onReject={handleRejectCall}
+          />
+        )}
+      </div>
     </div>
   );
 }
