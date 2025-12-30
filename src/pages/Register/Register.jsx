@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import "./Register.css"; // reuse same styles
 import axios from "axios";
@@ -11,6 +11,14 @@ import { useNavigate } from "react-router-dom";
 
 const Register = () => {
     const navigate = useNavigate();
+    useEffect(
+        () => {
+            const token = localStorage.getItem("token");
+            if (token) {
+                navigate("/", { replace: true })
+            }
+        }, [navigate]
+    )
     const [name, setName] = useState("");
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
@@ -19,7 +27,7 @@ const Register = () => {
 
     const handleSubmit = (e) => {
         e.preventDefault();
-        console.log(role)   
+        console.log(role)
 
         axios.post("https://major-project-perceiva.onrender.com/register", { name: name, email: email, password: password, username: username, role: role }, {
             headers: {
@@ -104,7 +112,7 @@ const Register = () => {
                     </div>
                     <div className="form-group">
                         <label>User Type</label>
-                        <select required value={role} onChange={(e)=>{setRole(e.target.value)}}>
+                        <select required value={role} onChange={(e) => { setRole(e.target.value) }}>
                             <option value="blind" >Blind</option>
                             <option value="volunteer" >Volunteer</option>
                         </select>

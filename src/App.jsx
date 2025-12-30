@@ -8,8 +8,8 @@ import ProtectedRoute from "./utils/ProtectedRoute";
 import CallPage from "./pages/Call/CallPage";
 import { CallProvider } from "./context/CallContext";
 import Navbar from "./components/Navbar/Navbar";
-import Home from "./pages/Home/Home";
 import RegisterRouter from "./pages/Register/RegisterRouter";
+import HomeRouter from "./pages/Home/HomeRouter";
 
 function App() {
 
@@ -19,8 +19,9 @@ function App() {
       <Routes>
 
         <Route element={<ProtectedRoute />}>
-          <Route path="/" element={<Home/>} />
+        
           <Route path="/addDetails" element={<RegisterRouter/>} />
+          <Route path="/" element={<HomeRouter/>} />
         </Route>
         <Route element={<ProtectedRoute />}>
           <Route path="/calls" element={

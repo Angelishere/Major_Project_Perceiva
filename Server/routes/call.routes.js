@@ -2,6 +2,7 @@ import express from "express";
 import User from "../models/Users.model.js";
 import { generateToken04 } from "../zegoToken.js";
 import jwt from "jsonwebtoken";
+import VolunteerProfile from "../models/VolunteerProfile.model.js";
 
 const router = express.Router();
 

@@ -1,9 +1,10 @@
 import { jwtDecode } from "jwt-decode";
-import { Navigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 import BlindRegister from "./BlindRegister/BlindRegister";
 import VolunteerRegister from "./VolunteerRegister/VolunteerRegister";
 
 const RegisterRouter = () => {
+  
   const token = localStorage.getItem("token");
 
   // 1️⃣ No token → go back to register

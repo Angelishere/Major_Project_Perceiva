@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import "./Login.css";
 import axios from "axios";
@@ -6,6 +6,15 @@ import api from "../../api/api";
 
 const Login = () => {
   const navigate = useNavigate();
+
+  useEffect(
+    ()=>{
+      const token = localStorage.getItem("token");
+      if(token){
+        navigate("/",{ replace:true })
+      }
+    }, [navigate]
+  )
   const [username, setUsername] = useState("");
   const [password, setpassword] = useState("");
 
@@ -17,6 +26,7 @@ const Login = () => {
       })
       localStorage.setItem("token",res.data.token);
       console.log("Login Successful")
+      navigate("/")
     } catch (error) {
       console.log(error);
       alert("Invalid credentials");
