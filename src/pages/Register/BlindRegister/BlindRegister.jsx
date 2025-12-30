@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState } from 'react'
 import styles from "./BlindRegister.module.css"
 import api from "../../../api/api.js"
 import { useNavigate } from 'react-router-dom'
@@ -92,7 +92,7 @@ const BlindRegister = () => {
           {/* Preferred Language */}
           <div className={styles.formGroup}>
             <label>Preferred Language</label>
-            <select value={language} onChange={(e)=>{e.target.value}}>
+            <select value={language} onChange={(e)=>{setLanguage(e.target.value)}}>
               <option value="en">English</option>
               <option value="hi">Hindi</option>
               <option value="ml">Malayalam</option>
