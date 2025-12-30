@@ -78,6 +78,22 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
         log("getRoomStreamList failed: " + e.message);
       }
 
+      // Proactively try playing the expected peer stream ID
+      const expectedPeerId = targetId ? `stream_${targetId}` : null;
+      if (expectedPeerId) {
+        try {
+          const remote = await zg.startPlayingStream(expectedPeerId);
+          setRemoteStream(remote);
+          if (remoteVideoRef.current) {
+            remoteVideoRef.current.srcObject = remote;
+            await remoteVideoRef.current.play().catch((e) => log("Autoplay blocked: " + e.message));
+          }
+          log(`✅ Proactively playing peer stream: ${expectedPeerId}`);
+        } catch (err) {
+          log(`Peer stream not yet available (${expectedPeerId}): ${err.message}`);
+        }
+      }
+
       // Listen for remote stream
       zg.on("roomStreamUpdate", async (_roomID, updateType, streamList) => {
         if (updateType === "ADD") {
