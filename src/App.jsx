@@ -15,23 +15,20 @@ function App() {
 
   return (
     <BrowserRouter>
-      <Navbar />
-      <Routes>
+      <CallProvider>
+        <Navbar />
+        <Routes>
 
-        <Route element={<ProtectedRoute />}>
-        
-          <Route path="/addDetails" element={<RegisterRouter/>} />
-          <Route path="/" element={<HomeRouter/>} />
-        </Route>
-        <Route element={<ProtectedRoute />}>
-          <Route path="/calls" element={
-            <CallProvider>
-              <CallPage />
-            </CallProvider>
-          } /></Route>
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
-      </Routes>
+          <Route element={<ProtectedRoute />}>
+            <Route path="/addDetails" element={<RegisterRouter/>} />
+            <Route path="/" element={<HomeRouter/>} />
+            <Route path="/calls" element={<CallPage />} />
+          </Route>
+          
+          <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
+        </Routes>
+      </CallProvider>
     </BrowserRouter>
   );
 }

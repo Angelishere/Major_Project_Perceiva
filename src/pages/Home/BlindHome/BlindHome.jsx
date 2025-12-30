@@ -89,7 +89,6 @@ export default function BlindHome() {
 
   return (
     <div>
-      <Navbar />
       <div
         style={{
           padding: 40,

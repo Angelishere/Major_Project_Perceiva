@@ -30,7 +30,7 @@ const VolunteerRegister = () => {
     });
 
     alert("Volunteer profile saved");
-    navigate("/volunteer/dashboard");
+    navigate("/");
   } catch (err) {
     console.error(err);
     alert("Failed to save profile");

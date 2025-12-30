@@ -37,7 +37,7 @@ const BlindRegister = () => {
     });
 
     alert("Profile saved successfully");
-    navigate("/blind/home");
+    navigate("/");
   } catch (err) {
     console.error(err);
     alert("Failed to save profile");
