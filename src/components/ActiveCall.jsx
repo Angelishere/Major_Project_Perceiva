@@ -181,6 +181,9 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
           engineRef.current.destroyStream(localStreamRef.current).catch((e) => console.warn(e));
         }
         engineRef.current.logoutRoom(roomID).catch((e) => console.warn(e));
+        
+        // Completely destroy the engine instance to stop all background processes
+        engineRef.current.destroy();
         engineRef.current = null;
       }
 
