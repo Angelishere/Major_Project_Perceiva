@@ -172,29 +172,88 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
 
   function cleanup() {
     try {
+      log("Starting cleanup...");
+      
       if (engineRef.current) {
+        // Remove all event listeners first
+        try {
+          engineRef.current.off("roomStreamUpdate");
+          engineRef.current.off("error");
+          engineRef.current.off("engineStateUpdate");
+          log("Removed event listeners");
+        } catch (e) {
+          console.warn("Error removing listeners:", e);
+        }
+
+        // Stop playing remote streams
+        if (remoteStream) {
+          try {
+            engineRef.current.stopPlayingStream(remoteStream.streamID || "stream_*").catch((e) => console.warn(e));
+            log("Stopped remote stream");
+          } catch (e) {
+            console.warn("Error stopping remote stream:", e);
+          }
+        }
+
+        // Stop publishing
         if (publishing && myUserID) {
-          const streamID = `stream_${myUserID}`;
-          engineRef.current.stopPublishingStream(streamID).catch((e) => console.warn(e));
+          try {
+            const streamID = `stream_${myUserID}`;
+            engineRef.current.stopPublishingStream(streamID);
+            log("Stopped publishing");
+          } catch (e) {
+            console.warn("Error stopping publish:", e);
+          }
         }
+
+        // Destroy local stream
         if (localStreamRef.current) {
-          engineRef.current.destroyStream(localStreamRef.current).catch((e) => console.warn(e));
+          try {
+            engineRef.current.destroyStream(localStreamRef.current);
+            log("Destroyed local stream");
+          } catch (e) {
+            console.warn("Error destroying stream:", e);
+          }
         }
-        engineRef.current.logoutRoom(roomID).catch((e) => console.warn(e));
-        
-        // Completely destroy the engine instance to stop all background processes
-        engineRef.current.destroy();
+
+        // Logout from room
+        try {
+          engineRef.current.logoutRoom(roomID);
+          log("Logged out from room");
+        } catch (e) {
+          console.warn("Error logging out:", e);
+        }
+
+        // Destroy engine - this stops all background processes
+        try {
+          engineRef.current.destroy();
+          log("Engine destroyed");
+        } catch (e) {
+          console.warn("Error destroying engine:", e);
+        }
+
         engineRef.current = null;
+        setEngine(null);
       }
 
+      // Stop media tracks
       if (localStreamRef.current) {
-        localStreamRef.current.getTracks().forEach((t) => t.stop());
-        localStreamRef.current = null;
+        try {
+          localStreamRef.current.getTracks().forEach((t) => t.stop());
+          localStreamRef.current = null;
+          log("Stopped media tracks");
+        } catch (e) {
+          console.warn("Error stopping tracks:", e);
+        }
       }
 
-      log("Call ended and cleaned up");
+      // Clear remote stream reference
+      setRemoteStream(null);
+      setPublishing(false);
+
+      log("✅ Cleanup complete");
     } catch (e) {
-      console.warn("Cleanup error:", e);
+      console.error("Cleanup error:", e);
     }
   }
 
