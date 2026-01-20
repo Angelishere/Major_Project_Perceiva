@@ -25,7 +25,7 @@ export default function Navbar() {
       borderBottom: "1px solid #eee",
       background: "#fff"
     }}>
-      <h2 style={{ margin: 0 }}>Perceiva - Allergy Safety System</h2>
+      <h2 style={{ margin: 0 }}>Perceiva Glasses</h2>
 
       <div style={{ display: "flex", gap: 12 }}>
         <Link to="/login" style={{ textDecoration: "none", fontWeight: 600 }}>Login</Link>
