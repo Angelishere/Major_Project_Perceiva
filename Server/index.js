@@ -5,19 +5,27 @@ import { v4 as uuidv4 } from "uuid";
 import { generateToken04 } from "./zegoToken.js";
 import callRoutes from "./routes/call.routes.js";
 import jwt from "jsonwebtoken";
-
-
+import OpenAI from "openai";
+import multer from "multer";
+import axios from "axios";
+import { GoogleGenAI } from "@google/genai";
 import mongoose from "mongoose";
 import express from "express";
 import bcrypt from "bcryptjs";
 import dotenv from "dotenv";
-dotenv.config();
 
 
 import User from "./models/Users.model.js"
 import BlindProfile from "./models/BlindProfile.model.js";
 import VolunteerProfile from "./models/VolunteerProfile.model.js";
 
+dotenv.config({ override: true });
+
+const k = process.env.OPENAI_API_KEY;
+console.log(
+  "RAW:", k,
+  "CHARS:", [...k].map(c => c.charCodeAt(0))
+);
 
 const app = express();
 app.use(express.json());
@@ -32,6 +40,9 @@ mongoose.connect(MONGOURI).then(
 ).catch(
   (Error) => { console.error(Error) }
 )
+const gemini = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY
+});
 
 const authMiddleware = (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -51,6 +62,128 @@ const authMiddleware = (req, res, next) => {
   }
 };
 
+const storage = multer.memoryStorage();
+const upload = multer(
+  {
+    storage,
+    fileFilter: (req,file,cb)=>{
+      if (file.mimetype.startsWith('image/')){
+        cb(null, true);
+      }
+      else {
+        cb(new Error('Only image files are allowed'), false)
+      }
+
+    }
+  }
+)
+
+async function extractIngredientsWithGemini(serpData) {
+  if (!Array.isArray(serpData) || serpData.length === 0) {
+    return { ingredients: [], allergens: [], warnings: [] };
+  }
+
+  // 1) Convert SERP objects into readable text
+  const searchText = serpData
+    .map(item => item.snippet)
+    .filter(Boolean)
+    .join("\n\n");
+
+  const prompt = `
+Extract ingredients and common allergens from the text below.
+Do not invent items.
+
+Return JSON only in this format:
+{
+  "ingredients": [],
+  "allergens": [],
+  "warnings": []
+}
+
+Text:
+${searchText}
+`;
+
+  try {
+    const response = await gemini.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt
+    });
+
+    const rawText = response.text || "";
+    console.log("[Gemini RAW]", rawText);
+
+    if (!rawText) {
+      return { ingredients: [], allergens: [], warnings: [] };
+    }
+
+    // 2) Strip markdown fences if present
+    const jsonMatch = rawText.match(/```json\s*([\s\S]*?)```/);
+    const jsonText = jsonMatch ? jsonMatch[1] : rawText;
+
+    // 3) Parse the correct variable
+    return JSON.parse(jsonText);
+
+  } catch (err) {
+    console.error("❌ Gemini extraction error:", err.message);
+    return { ingredients: [], allergens: [], warnings: [] };
+  }
+}
+
+
+
+
+
+async function searchSerpApi(query) {
+  const params = {
+    engine: "google_ai_mode",
+    q: query,
+    api_key: process.env.SERPAPI_KEY
+  };
+
+  try {
+    const response = await axios.get('https://serpapi.com/search', { params });
+    console.log("Results from SerpApi:", response.data.text_blocks);
+    return response.data.text_blocks;
+  } catch (error) {
+    console.error("❌ Error contacting SerpApi:", error.message);
+    return null;
+  }
+}
+
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+async function identifyProductWithGPT(imageBuffer, mimeType) {
+  const client = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY
+  });
+
+  const base64 = imageBuffer.toString("base64");
+  const prompt = "Look at the product photo and reply with ONLY the brand and exact product name. No other text.";
+
+  const resp = await client.responses.create({
+    model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
+    input: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: prompt
+          },
+          {
+            type: "input_image",
+            image_url: `data:${mimeType};base64,${base64}`
+          }
+        ]
+      }
+    ]
+  });
+
+  const text = resp.output_text || "";
+  return text.trim().replace(/^["']|["']$/g, "");
+}
 
 app.use("/api/call", callRoutes);
 // Health
@@ -265,7 +398,146 @@ app.put("/api/profile", authMiddleware, async (req, res) => {
 });
 
 
+app.post("/medical-check", upload.single("image"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: "No image uploaded", error: "Image file is required" });
+    }
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(500).json({ message: "Missing OPENAI_API_KEY" });
+    }
+    if (!process.env.SERPAPI_KEY) {
+      return res.status(500).json({ message: "Missing SERPAPI_KEY" });
+    }
 
+    // 1) Let GPT name the product from the image
+    const productName = await identifyProductWithGPT(req.file.buffer, req.file.mimetype || "image/jpeg");
+    if (!productName) {
+      return res.status(502).json({ message: "Could not identify product from image" });
+    }
+
+    // 2) Fetch ingredient info via SerpApi
+    const query = `${productName} ingredients and contain any allergens?`;
+    console.log("[INFO] GPT identified:", productName);
+    console.log("[INFO] Querying SerpApi with:", query);
+
+    const data = await searchSerpApi(query);
+    if (!data) {
+      return res.status(502).json({ message: "Failed to retrieve ingredient information", error: "No data from SerpApi" });
+    }
+
+    // 3) Extract ingredients/allergens using Gemini
+    console.log("[INFO] Extracting ingredients with Gemini...");
+    const result = await extractIngredientsWithGemini(data, productName);
+
+    return res.status(200).json({
+      message: "Medical check completed successfully",
+      product_name: productName,
+      ingredients: result.ingredients,
+      allergens: result.allergens,
+      warnings: result.warnings,
+      summary: {
+        total_ingredients: result.total_ingredients,
+        allergens_detected: result.allergen_count
+      }
+    });
+  } catch (error) {
+    console.error("Medical check error:", error);
+    res.status(500).json({ message: "Server error during medical check", error: error.message });
+  }
+});
+
+
+app.post("/identify-product", upload.single("image"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: "No image uploaded", error: "Image file is required" });
+    }
+  
+
+    const client = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY
+    });
+    
+
+    const mimeType = req.file.mimetype || "image/jpeg";
+    const base64 = req.file.buffer.toString("base64");
+    const prompt = "which product is this, just answer the name of it";
+
+    const resp = await client.responses.create({
+      model: "gpt-4.1-mini",
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: prompt
+            },
+            {
+              type: "input_image",
+              image_url: `data:${mimeType};base64,${base64}`
+            }
+          ]
+        }
+      ]
+    });
+
+    const productName = (resp.output_text || "").trim().replace(/^["']|["']$/g, "");
+
+    if (!productName) {
+      return res.status(502).json({ message: "Could not identify product from image" });
+    }
+
+    return res.status(200).json({
+      message: "Product identified successfully",
+      product_name: productName,
+      usage: resp.usage
+    });
+  } catch (error) {
+    console.error("Identify product error:", error);
+    res.status(500).json({ message: "Server error during product identification", error: error.message });
+  }
+});
+
+// Add this AFTER line 238 (after the identifyProductWithGPT function)
+// Temporary debug route - remove after fixing
+app.get("/debug-openai", async (req, res) => {
+  try {
+    const envKey = process.env.OPENAI_API_KEY;
+    const client = new OpenAI({ apiKey: envKey });
+
+    // Try to list models to test the key
+    const models = await client.models.list();
+    
+    return res.json({
+      success: true,
+      env_key_preview: envKey ? `${envKey.substring(0, 20)}...${envKey.slice(-10)}` : "MISSING",
+      env_key_length: envKey?.length,
+      hardcoded_key_length: 164, // Your hardcoded key length
+      keys_match: envKey?.length === 164,
+      api_test: "✅ API key works - models retrieved",
+      model_count: models.data.length,
+      all_env_vars: {
+        OPENAI_API_KEY: envKey ? "SET" : "MISSING",
+        OPENAI_ORG_ID: process.env.OPENAI_ORG_ID || "not set",
+        OPENAI_PROJECT: process.env.OPENAI_PROJECT || "not set"
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+      env_key_preview: process.env.OPENAI_API_KEY ? `${process.env.OPENAI_API_KEY.substring(0, 20)}...` : "MISSING",
+      env_key_length: process.env.OPENAI_API_KEY?.length,
+      all_env_vars: {
+        OPENAI_API_KEY: process.env.OPENAI_API_KEY ? "SET" : "MISSING",
+        OPENAI_ORG_ID: process.env.OPENAI_ORG_ID || "not set",
+        OPENAI_PROJECT: process.env.OPENAI_PROJECT || "not set"
+      }
+    });
+  }
+});
 
 const port = process.env.PORT || 4000;
 app.listen(port, () => {
