@@ -21,11 +21,6 @@ import VolunteerProfile from "./models/VolunteerProfile.model.js";
 
 dotenv.config({ override: true });
 
-const k = process.env.OPENAI_API_KEY;
-console.log(
-  "RAW:", k,
-  "CHARS:", [...k].map(c => c.charCodeAt(0))
-);
 
 const app = express();
 app.use(express.json());
@@ -66,8 +61,8 @@ const storage = multer.memoryStorage();
 const upload = multer(
   {
     storage,
-    fileFilter: (req,file,cb)=>{
-      if (file.mimetype.startsWith('image/')){
+    fileFilter: (req, file, cb) => {
+      if (file.mimetype.startsWith('image/')) {
         cb(null, true);
       }
       else {
@@ -129,6 +124,87 @@ ${searchText}
     return { ingredients: [], allergens: [], warnings: [] };
   }
 }
+
+//testing function for gemini call with search data and the medical history 
+
+async function getConsumabilityAdviceWithGemini({
+  productName,
+  serpData,
+  medicalProfile
+}) {
+  if (!Array.isArray(serpData) || serpData.length === 0) {
+    return {
+      isSafe: false,
+      advice: "Insufficient ingredient information available",
+      risks: []
+    };
+  }
+
+  // Convert SERP objects into readable text
+  const searchText = serpData
+    .map(item => item.snippet)
+    .filter(Boolean)
+    .join("\n\n");
+
+  const prompt = `
+You are a qualified medical nutritionist advising a visually impaired patient.
+
+Patient medical history:
+- Allergies: ${medicalProfile.allergies.length ? medicalProfile.allergies.join(", ") : "none"}
+- Medical conditions: ${medicalProfile.medicalConditions.length ? medicalProfile.medicalConditions.join(", ") : "none"}
+- Dietary preferences: ${medicalProfile.dietaryPreferences.length ? medicalProfile.dietaryPreferences.join(", ") : "none"}
+
+Product under consideration:
+${productName}
+
+Ingredient-related information from reliable sources (verbatim, unfiltered):
+${searchText}
+
+Your task:
+Carefully assess whether this product is appropriate for the patient.
+
+Guidelines:
+- Base your advice ONLY on the information provided above.
+- Do NOT assume or invent ingredients.
+- Be medically conservative.
+- If there is any meaningful risk, advise against consumption.
+- If information is insufficient, clearly say so.
+
+Response style:
+- Write as a doctor or clinical nutritionist speaking directly to the patient.
+- Use clear, calm, and supportive language.
+- Avoid technical jargon.
+- Do NOT mention probabilities, percentages, or internal reasoning.
+- Do NOT output JSON, bullet points, headings, or labels.
+
+Return ONLY the medical advice.
+`;
+
+
+  try {
+    const response = await gemini.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt
+    });
+
+    const rawText = response.text || "";
+
+    const jsonMatch = rawText.match(/```json\s*([\s\S]*?)```/);
+    const jsonText = jsonMatch ? jsonMatch[1] : rawText;
+
+    return JSON.parse(jsonText);
+
+  } catch (err) {
+    console.error("❌ Gemini consumability error:", err.message);
+    return {
+      isSafe: false,
+      risks: ["Unable to verify product safety"],
+      advice: "Please consult a healthcare professional before consuming"
+    };
+  }
+}
+
+
 
 
 
@@ -286,7 +362,7 @@ app.post("/register", async (req, res) => {
       { expiresIn: process.env.JWT_EXPIRES || "1h" }
     );
 
-    res.status(201).json({ message: "User registered successfully", token:token });
+    res.status(201).json({ message: "User registered successfully", token: token });
     console.log(`Account created for username: "${username}"`);
 
   } catch (error) {
@@ -453,12 +529,12 @@ app.post("/identify-product", upload.single("image"), async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ message: "No image uploaded", error: "Image file is required" });
     }
-  
+
 
     const client = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY
     });
-    
+
 
     const mimeType = req.file.mimetype || "image/jpeg";
     const base64 = req.file.buffer.toString("base64");
@@ -500,44 +576,110 @@ app.post("/identify-product", upload.single("image"), async (req, res) => {
   }
 });
 
-// Add this AFTER line 238 (after the identifyProductWithGPT function)
-// Temporary debug route - remove after fixing
-app.get("/debug-openai", async (req, res) => {
+app.post("/medical-check2", authMiddleware, upload.single("image"), async (req, res) => {
   try {
-    const envKey = process.env.OPENAI_API_KEY;
-    const client = new OpenAI({ apiKey: envKey });
 
-    // Try to list models to test the key
-    const models = await client.models.list();
-    
-    return res.json({
-      success: true,
-      env_key_preview: envKey ? `${envKey.substring(0, 20)}...${envKey.slice(-10)}` : "MISSING",
-      env_key_length: envKey?.length,
-      hardcoded_key_length: 164, // Your hardcoded key length
-      keys_match: envKey?.length === 164,
-      api_test: "✅ API key works - models retrieved",
-      model_count: models.data.length,
-      all_env_vars: {
-        OPENAI_API_KEY: envKey ? "SET" : "MISSING",
-        OPENAI_ORG_ID: process.env.OPENAI_ORG_ID || "not set",
-        OPENAI_PROJECT: process.env.OPENAI_PROJECT || "not set"
-      }
+    if (!req.file) {
+      return res.status(400).json({
+        message: "No image uploaded",
+        error: "Image file is required"
+      });
+    }
+
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(500).json({ message: "Missing OPENAI_API_KEY" });
+    }
+
+    if (!process.env.SERPAPI_KEY) {
+      return res.status(500).json({ message: "Missing SERPAPI_KEY" });
+    }
+
+    // -----------------------------
+    // Decode user from JWT
+    // -----------------------------
+    const { userId, role } = req.user;
+
+    if (role !== "blind") {
+      return res.status(403).json({
+        message: "Medical check is only available for blind users"
+      });
+    }
+
+    // -----------------------------
+    // Fetch blind medical profile
+    // -----------------------------
+    const blindProfile = await BlindProfile.findOne({ user: userId });
+
+    if (!blindProfile) {
+      return res.status(404).json({
+        message: "Blind medical profile not found"
+      });
+    }
+
+
+    const productName = await identifyProductWithGPT(
+      req.file.buffer,
+      req.file.mimetype || "image/jpeg"
+    );
+
+    if (!productName) {
+      return res.status(502).json({
+        message: "Could not identify product from image"
+      });
+    }
+
+    console.log("[INFO] GPT identified product:", productName);
+
+    // -----------------------------
+    // Fetch raw ingredient data from SerpApi
+    // -----------------------------
+    const query = `${productName} ingredients and allergens`;
+    console.log("[INFO] Querying SerpApi with:", query);
+
+    const serpData = await searchSerpApi(query);
+
+    if (!serpData || serpData.length === 0) {
+      return res.status(502).json({
+        message: "Failed to retrieve ingredient information"
+      });
+    }
+
+    // -----------------------------
+    // SINGLE Gemini call:
+    // raw SERP data + medical history
+    // -----------------------------
+    console.log("[INFO] Getting consumability advice from Gemini...");
+
+    const aiAdvice = await getConsumabilityAdviceWithGemini({
+      productName,
+      serpData,
+      medicalProfile: blindProfile
     });
+
+    // -----------------------------
+    // Final response
+    // -----------------------------
+    return res.status(200).json({
+      message: "Medical check completed successfully",
+      product_name: productName,
+      medical_profile_used: {
+        allergies: blindProfile.allergies,
+        medicalConditions: blindProfile.medicalConditions,
+        dietaryPreferences: blindProfile.dietaryPreferences
+      },
+      ai_advice: aiAdvice
+    });
+
   } catch (error) {
+    console.error("Medical check error:", error);
     return res.status(500).json({
-      success: false,
-      error: error.message,
-      env_key_preview: process.env.OPENAI_API_KEY ? `${process.env.OPENAI_API_KEY.substring(0, 20)}...` : "MISSING",
-      env_key_length: process.env.OPENAI_API_KEY?.length,
-      all_env_vars: {
-        OPENAI_API_KEY: process.env.OPENAI_API_KEY ? "SET" : "MISSING",
-        OPENAI_ORG_ID: process.env.OPENAI_ORG_ID || "not set",
-        OPENAI_PROJECT: process.env.OPENAI_PROJECT || "not set"
-      }
+      message: "Server error during medical check",
+      error: error.message
     });
   }
-});
+}
+);
+
 
 const port = process.env.PORT || 4000;
 app.listen(port, () => {
