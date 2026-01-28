@@ -1,18 +1,17 @@
 import React, { useEffect, useRef, useState } from "react";
-import { ZegoExpressEngine } from "zego-express-engine-webrtc";
+import { Room, RoomEvent, Track } from "livekit-client";
 import api from "../api/api";
 
 export default function ActiveCall({ targetUser, roomID, onEndCall }) {
-  const [engine, setEngine] = useState(null);
+  const [room, setRoom] = useState(null);
   const [publishing, setPublishing] = useState(false);
-  const [remoteStream, setRemoteStream] = useState(null);
+  const [remoteParticipant, setRemoteParticipant] = useState(null);
   const [logs, setLogs] = useState([]);
   const [myUserID, setMyUserID] = useState(null);
-  
+
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
-  const engineRef = useRef(null);
-  const localStreamRef = useRef(null);
+  const roomRef = useRef(null);
 
   function log(msg) {
     console.log(msg);
@@ -29,131 +28,110 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
     try {
       log("Initializing call...");
 
-      // Get Zego token from backend
+      // Get LiveKit token from backend
       const targetId = targetUser?._id ?? targetUser?.id;
       const res = await api.post(
         "/api/call/get-room",
         { targetUserId: targetId }
       );
 
-      const { appID, token, userID } = res.data;
+      const { livekitUrl, token, userID } = res.data;
       setMyUserID(userID);
-      log(`Got Zego token for userID: ${userID}`);
+      log(`Got LiveKit token for userID: ${userID}`);
 
-      // Initialize Zego
-      const zg = new ZegoExpressEngine(appID, "wss://wss.zegocloud.com/ws");
-      engineRef.current = zg;
-      setEngine(zg);
-
-      // Login to room
-      await zg.loginRoom(roomID, token, {
-        userID: userID,
-        userName: "user",
+      // Initialize LiveKit Room
+      const newRoom = new Room({
+        adaptiveStream: true,
+        dynacast: true,
       });
+      roomRef.current = newRoom;
+      setRoom(newRoom);
 
-      log("Logged into room: " + roomID);
+      // Set up event listeners before connecting
+      setupRoomListeners(newRoom);
 
-      // Fetch existing streams already in the room and play them
-      try {
-        const existing = await zg.getRoomStreamList(roomID);
-        if (Array.isArray(existing) && existing.length) {
-          log(`Initial streams: ${existing.map(s => s.streamID).join(', ')}`);
-          for (const s of existing) {
-            try {
-              const remote = await zg.startPlayingStream(s.streamID);
-              setRemoteStream(remote);
-              if (remoteVideoRef.current) {
-                remoteVideoRef.current.srcObject = remote;
-                await remoteVideoRef.current.play().catch((e) => log("Autoplay blocked: " + e.message));
-              }
-              log(`✅ Playing initial stream: ${s.streamID}`);
-            } catch (err) {
-              log(`Failed to play initial stream: ${err.message}`);
-            }
-          }
-        } else {
-          log("No initial streams; waiting for updates...");
-        }
-      } catch (e) {
-        log("getRoomStreamList failed: " + e.message);
+      // Connect to room
+      await newRoom.connect(livekitUrl, token);
+      log("Connected to room: " + roomID);
+
+      // Enable camera and microphone
+      await newRoom.localParticipant.enableCameraAndMicrophone();
+      log("Camera and microphone enabled");
+      setPublishing(true);
+
+      // Attach local video
+      const localVideoTrack = newRoom.localParticipant.getTrackPublication(Track.Source.Camera);
+      if (localVideoTrack?.track && localVideoRef.current) {
+        localVideoTrack.track.attach(localVideoRef.current);
+        log("✅ Local video attached");
       }
 
-      // Proactively try playing the expected peer stream ID
-      const expectedPeerId = targetId ? `stream_${targetId}` : null;
-      if (expectedPeerId) {
-        try {
-          const remote = await zg.startPlayingStream(expectedPeerId);
-          setRemoteStream(remote);
-          if (remoteVideoRef.current) {
-            remoteVideoRef.current.srcObject = remote;
-            await remoteVideoRef.current.play().catch((e) => log("Autoplay blocked: " + e.message));
-          }
-          log(`✅ Proactively playing peer stream: ${expectedPeerId}`);
-        } catch (err) {
-          log(`Peer stream not yet available (${expectedPeerId}): ${err.message}`);
-        }
-      }
-
-      // Listen for remote stream
-      zg.on("roomStreamUpdate", async (_roomID, updateType, streamList) => {
-        if (updateType === "ADD") {
-          for (const stream of streamList) {
-            log(`Remote stream detected: ${stream.streamID}`);
-            
-            // Play the remote stream
-            try {
-              const remote = await zg.startPlayingStream(stream.streamID);
-              setRemoteStream(remote);
-              if (remoteVideoRef.current) {
-                remoteVideoRef.current.srcObject = remote;
-                await remoteVideoRef.current.play().catch((e) => log("Autoplay blocked: " + e.message));
-              }
-              log(`✅ Playing remote stream: ${stream.streamID}`);
-            } catch (err) {
-              log(`Failed to play stream: ${err.message}`);
-            }
-          }
-        } else if (updateType === "DELETE") {
-          log(`Remote stream removed`);
-          setRemoteStream(null);
-        }
+      // Check for existing remote participants
+      newRoom.remoteParticipants.forEach((participant) => {
+        handleParticipantConnected(participant);
       });
 
-      // Auto-start publishing
-      startPublishing(zg, userID);
     } catch (error) {
       log("Call init failed: " + error.message);
       console.error(error);
     }
   }
 
-  async function startPublishing(zg, userID) {
-    try {
-      log("Starting local stream...");
+  function setupRoomListeners(room) {
+    room.on(RoomEvent.ParticipantConnected, (participant) => {
+      log(`Participant joined: ${participant.identity}`);
+      handleParticipantConnected(participant);
+    });
 
-      // Create Zego stream
-      const zegoStream = await zg.createStream({
-        camera: {
-          video: { width: 640, height: 480 },
-          audio: true,
-        },
-      });
-
-      localStreamRef.current = zegoStream;
-
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = zegoStream;
-        localVideoRef.current.muted = true;
-        await localVideoRef.current.play().catch((e) => log("Local preview play blocked"));
+    room.on(RoomEvent.ParticipantDisconnected, (participant) => {
+      log(`Participant left: ${participant.identity}`);
+      setRemoteParticipant(null);
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = null;
       }
-      // Publish with consistent stream ID based on userID
-      const streamID = `stream_${userID}`;
-      await zg.startPublishingStream(streamID, zegoStream);
-      setPublishing(true);
-      log(`✅ Publishing as: ${streamID}`);
-    } catch (err) {
-      log("Publishing failed: " + err.message);
-    }
+    });
+
+    room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+      log(`Track subscribed: ${track.kind} from ${participant.identity}`);
+      if (track.kind === "video" && remoteVideoRef.current) {
+        track.attach(remoteVideoRef.current);
+        log("✅ Remote video attached");
+      }
+      if (track.kind === "audio") {
+        // Audio tracks auto-play when attached to an element
+        const audioElement = track.attach();
+        document.body.appendChild(audioElement);
+        log("✅ Remote audio attached");
+      }
+    });
+
+    room.on(RoomEvent.TrackUnsubscribed, (track) => {
+      log(`Track unsubscribed: ${track.kind}`);
+      track.detach();
+    });
+
+    room.on(RoomEvent.Disconnected, () => {
+      log("Disconnected from room");
+    });
+  }
+
+  function handleParticipantConnected(participant) {
+    setRemoteParticipant(participant);
+
+    // Subscribe to existing tracks
+    participant.trackPublications.forEach((publication) => {
+      if (publication.track) {
+        if (publication.track.kind === "video" && remoteVideoRef.current) {
+          publication.track.attach(remoteVideoRef.current);
+          log(`✅ Attached existing video from ${participant.identity}`);
+        }
+        if (publication.track.kind === "audio") {
+          const audioElement = publication.track.attach();
+          document.body.appendChild(audioElement);
+          log(`✅ Attached existing audio from ${participant.identity}`);
+        }
+      }
+    });
   }
 
   async function handleEndCall() {
@@ -173,82 +151,17 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
   function cleanup() {
     try {
       log("Starting cleanup...");
-      
-      if (engineRef.current) {
-        // Remove all event listeners first
-        try {
-          engineRef.current.off("roomStreamUpdate");
-          engineRef.current.off("error");
-          engineRef.current.off("engineStateUpdate");
-          log("Removed event listeners");
-        } catch (e) {
-          console.warn("Error removing listeners:", e);
-        }
 
-        // Stop playing remote streams
-        if (remoteStream) {
-          try {
-            engineRef.current.stopPlayingStream(remoteStream.streamID || "stream_*").catch((e) => console.warn(e));
-            log("Stopped remote stream");
-          } catch (e) {
-            console.warn("Error stopping remote stream:", e);
-          }
-        }
-
-        // Stop publishing
-        if (publishing && myUserID) {
-          try {
-            const streamID = `stream_${myUserID}`;
-            engineRef.current.stopPublishingStream(streamID);
-            log("Stopped publishing");
-          } catch (e) {
-            console.warn("Error stopping publish:", e);
-          }
-        }
-
-        // Destroy local stream
-        if (localStreamRef.current) {
-          try {
-            engineRef.current.destroyStream(localStreamRef.current);
-            log("Destroyed local stream");
-          } catch (e) {
-            console.warn("Error destroying stream:", e);
-          }
-        }
-
-        // Logout from room
-        try {
-          engineRef.current.logoutRoom(roomID);
-          log("Logged out from room");
-        } catch (e) {
-          console.warn("Error logging out:", e);
-        }
-
-        // Destroy engine - this stops all background processes
-        try {
-          engineRef.current.destroy();
-          log("Engine destroyed");
-        } catch (e) {
-          console.warn("Error destroying engine:", e);
-        }
-
-        engineRef.current = null;
-        setEngine(null);
+      if (roomRef.current) {
+        // Disconnect from room - this handles all track cleanup
+        roomRef.current.disconnect();
+        log("Disconnected from room");
+        roomRef.current = null;
+        setRoom(null);
       }
 
-      // Stop media tracks
-      if (localStreamRef.current) {
-        try {
-          localStreamRef.current.getTracks().forEach((t) => t.stop());
-          localStreamRef.current = null;
-          log("Stopped media tracks");
-        } catch (e) {
-          console.warn("Error stopping tracks:", e);
-        }
-      }
-
-      // Clear remote stream reference
-      setRemoteStream(null);
+      // Clear remote participant reference
+      setRemoteParticipant(null);
       setPublishing(false);
 
       log("✅ Cleanup complete");
@@ -293,7 +206,7 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
               borderRadius: 8,
             }}
           />
-          {!remoteStream && (
+          {!remoteParticipant && (
             <div
               style={{
                 position: "absolute",
