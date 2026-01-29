@@ -20,7 +20,20 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
 
   useEffect(() => {
     initCall();
-    return () => cleanup();
+
+    // Handle tab close / browser navigation
+    const handleBeforeUnload = (e) => {
+      if (roomRef.current) {
+        roomRef.current.disconnect(true);
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      cleanup();
+    };
     // eslint-disable-next-line
   }, []);
 
@@ -139,26 +152,46 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
       // End call on backend
       await api.post("/api/call/end-call", { roomID });
 
-      cleanup();
+      await cleanup();
       onEndCall();
     } catch (error) {
       console.error("End call failed:", error);
-      cleanup();
+      await cleanup();
       onEndCall();
     }
   }
 
-  function cleanup() {
+  async function cleanup() {
     try {
       log("Starting cleanup...");
 
       if (roomRef.current) {
-        // Disconnect from room - this handles all track cleanup
-        roomRef.current.disconnect();
+        // Unpublish all tracks first
+        const localParticipant = roomRef.current.localParticipant;
+        if (localParticipant) {
+          localParticipant.trackPublications.forEach((publication) => {
+            if (publication.track) {
+              publication.track.stop();
+              log(`Stopped track: ${publication.track.kind}`);
+            }
+          });
+        }
+
+        // Disconnect from room - AWAIT this!
+        await roomRef.current.disconnect(true); // true = stop all tracks
         log("Disconnected from room");
         roomRef.current = null;
         setRoom(null);
       }
+
+      // Remove any audio elements we added to document.body
+      const audioElements = document.querySelectorAll('audio');
+      audioElements.forEach((el) => {
+        if (el.parentNode === document.body) {
+          el.remove();
+          log("Removed audio element");
+        }
+      });
 
       // Clear remote participant reference
       setRemoteParticipant(null);
