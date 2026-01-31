@@ -680,8 +680,116 @@ app.post("/medical-check2", authMiddleware, upload.single("image"), async (req, 
 }
 );
 
+// Multer config for audio uploads
+const audioStorage = multer.memoryStorage();
+const audioUpload = multer({
+  storage: audioStorage,
+  fileFilter: (req, file, cb) => {
+    // Accept common audio formats
+    const allowedMimes = ['audio/wav', 'audio/mpeg', 'audio/mp3', 'audio/webm', 'audio/ogg', 'audio/flac', 'audio/m4a', 'audio/x-m4a'];
+    if (allowedMimes.includes(file.mimetype) || file.mimetype.startsWith('audio/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only audio files are allowed'), false);
+    }
+  }
+});
+
+app.post("/pi_audio", audioUpload.single("audio"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: "No audio file uploaded", error: "Audio file is required" });
+    }
+
+    console.log("[pi_audio] Received audio file:", req.file.originalname, "Size:", req.file.size);
+
+    // 1) Send audio to FastAPI /stt-upload endpoint
+    const FormData = (await import('form-data')).default;
+    const formData = new FormData();
+    formData.append('file', req.file.buffer, {
+      filename: req.file.originalname || 'audio.wav',
+      contentType: req.file.mimetype || 'audio/wav'
+    });
+
+    const fastApiUrl = process.env.FASTAPI_URL || 'http://localhost:8000';
+    console.log("[pi_audio] Sending to FastAPI:", `${fastApiUrl}/stt-upload`);
+
+    const sttResponse = await axios.post(`${fastApiUrl}/stt-upload`, formData, {
+      headers: {
+        ...formData.getHeaders()
+      },
+      timeout: 60000 // 60 second timeout for transcription
+    });
+
+    const transcribedText = sttResponse.data?.text;
+    console.log("[pi_audio] Transcribed text:", transcribedText);
+
+    if (!transcribedText || transcribedText === "Error") {
+      return res.status(502).json({
+        message: "Speech-to-text failed",
+        error: sttResponse.data?.error || "No transcription returned"
+      });
+    }
+
+    // 2) Send transcribed text to Gemini
+    const geminiPrompt = `You are a helpful AI assistant for a visually impaired user. 
+Respond to the following user query in a clear, concise, and conversational manner.
+Keep your response brief but helpful.
+
+User said: "${transcribedText}"`;
+
+    const geminiResponse = await gemini.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: geminiPrompt
+    });
+
+    const aiResponse = geminiResponse.text || "";
+    console.log("[pi_audio] Gemini response:", aiResponse);
+
+    // 3) Send AI response to FastAPI /tts endpoint to get audio
+    console.log("[pi_audio] Sending to TTS:", `${fastApiUrl}/tts`);
+
+    const ttsResponse = await axios.post(
+      `${fastApiUrl}/tts`,
+      { text: aiResponse },
+      {
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        responseType: 'arraybuffer', // Important: receive binary data
+        timeout: 120000 // 2 minute timeout for TTS generation
+      }
+    );
+
+    console.log("[pi_audio] TTS audio received, size:", ttsResponse.data.length);
+
+    // 4) Return the audio WAV file
+    res.set({
+      'Content-Type': 'audio/wav',
+      'Content-Disposition': 'inline; filename=response.wav',
+      'Content-Length': ttsResponse.data.length
+    });
+
+    return res.send(Buffer.from(ttsResponse.data));
+
+  } catch (error) {
+    console.error("[pi_audio] Error:", error.message);
+
+    if (error.code === 'ECONNREFUSED') {
+      return res.status(503).json({
+        message: "FastAPI service unavailable",
+        error: "Could not connect to speech-to-text/TTS service"
+      });
+    }
+
+    return res.status(500).json({
+      message: "Error processing audio",
+      error: error.message
+    });
+  }
+})
 
 const port = process.env.PORT || 4000;
 app.listen(port, () => {
-  console.log(`Zego token server running on port ${port}`);
+  console.log(`server running on port ${port}`);
 });
