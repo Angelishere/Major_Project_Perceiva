@@ -261,6 +261,105 @@ async function identifyProductWithGPT(imageBuffer, mimeType) {
   return text.trim().replace(/^["']|["']$/g, "");
 }
 
+async function identifyUserIntent(transcribedText) {
+  const intentPrompt = `You are an intent classifier for a visually impaired user assistance application.
+Based on the user's speech, identify which module they want to use.
+
+Available modules:
+1. "Product Identification Module" - User wants to identify/know what a product is
+2. "Medical Compatibility Module" - User wants to check if a product is safe for them medically (allergies, health conditions)
+3. "Price Comparison Module" - User wants to compare prices or find best deals
+4. "Volunteer Video Call Module" - User wants to connect with a volunteer for video assistance
+5. "AI Assistance Module" - User wants general help, questions, or conversation
+6. "Currency Recognition Module" - User wants to identify currency notes or coins, know the denomination of money
+
+Analyze this user speech and respond with ONLY the exact module name from the list above. Nothing else.
+
+User said: "${transcribedText}"`;
+
+  try {
+    const intentResponse = await gemini.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: intentPrompt
+    });
+
+    return (intentResponse.text || "AI Assistance Module").trim();
+  } catch (error) {
+    console.error("[identifyUserIntent] Error:", error.message);
+    return "AI Assistance Module";
+  }
+}
+
+/**
+ * Send audio buffer to FastAPI for speech-to-text transcription
+ * @param {Buffer} audioBuffer - The audio file buffer
+ * @param {string} filename - Original filename
+ * @param {string} mimeType - Audio MIME type
+ * @returns {Promise<{text: string, error?: string}>}
+ */
+async function speechToText(audioBuffer, filename = 'audio.wav', mimeType = 'audio/wav') {
+  const FormData = (await import('form-data')).default;
+  const formData = new FormData();
+  formData.append('file', audioBuffer, {
+    filename: filename,
+    contentType: mimeType
+  });
+
+  const fastApiUrl = process.env.FASTAPI_URL || 'http://localhost:8000';
+  console.log("[speechToText] Sending to FastAPI:", `${fastApiUrl}/stt-upload`);
+
+  try {
+    const response = await axios.post(`${fastApiUrl}/stt-upload`, formData, {
+      headers: {
+        ...formData.getHeaders()
+      },
+      timeout: 60000 // 60 second timeout
+    });
+
+    const text = response.data?.text;
+    console.log("[speechToText] Transcribed:", text);
+
+    if (!text || text === "Error") {
+      return { text: null, error: response.data?.error || "No transcription returned" };
+    }
+
+    return { text };
+  } catch (error) {
+    console.error("[speechToText] Error:", error.message);
+    return { text: null, error: error.message };
+  }
+}
+
+/**
+ * Send text to FastAPI for text-to-speech synthesis
+ * @param {string} text - Text to convert to speech
+ * @returns {Promise<{audio: Buffer, error?: string}>}
+ */
+async function textToSpeech(text) {
+  const fastApiUrl = process.env.FASTAPI_URL || 'http://localhost:8000';
+  console.log("[textToSpeech] Sending to TTS:", `${fastApiUrl}/tts`);
+
+  try {
+    const response = await axios.post(
+      `${fastApiUrl}/tts`,
+      { text },
+      {
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        responseType: 'arraybuffer',
+        timeout: 120000 // 2 minute timeout
+      }
+    );
+
+    console.log("[textToSpeech] Audio received, size:", response.data.length);
+    return { audio: Buffer.from(response.data) };
+  } catch (error) {
+    console.error("[textToSpeech] Error:", error.message);
+    return { audio: null, error: error.message };
+  }
+}
+
 app.use("/api/call", callRoutes);
 // Health
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
@@ -703,74 +802,63 @@ app.post("/pi_audio", audioUpload.single("audio"), async (req, res) => {
 
     console.log("[pi_audio] Received audio file:", req.file.originalname, "Size:", req.file.size);
 
-    // 1) Send audio to FastAPI /stt-upload endpoint
-    const FormData = (await import('form-data')).default;
-    const formData = new FormData();
-    formData.append('file', req.file.buffer, {
-      filename: req.file.originalname || 'audio.wav',
-      contentType: req.file.mimetype || 'audio/wav'
-    });
+    // 1) Speech-to-text
+    const sttResult = await speechToText(
+      req.file.buffer,
+      req.file.originalname || 'audio.wav',
+      req.file.mimetype || 'audio/wav'
+    );
 
-    const fastApiUrl = process.env.FASTAPI_URL || 'http://localhost:8000';
-    console.log("[pi_audio] Sending to FastAPI:", `${fastApiUrl}/stt-upload`);
-
-    const sttResponse = await axios.post(`${fastApiUrl}/stt-upload`, formData, {
-      headers: {
-        ...formData.getHeaders()
-      },
-      timeout: 60000 // 60 second timeout for transcription
-    });
-
-    const transcribedText = sttResponse.data?.text;
-    console.log("[pi_audio] Transcribed text:", transcribedText);
-
-    if (!transcribedText || transcribedText === "Error") {
+    if (!sttResult.text) {
       return res.status(502).json({
         message: "Speech-to-text failed",
-        error: sttResponse.data?.error || "No transcription returned"
+        error: sttResult.error
       });
     }
 
-    // 2) Send transcribed text to Gemini
-    const geminiPrompt = `You are a helpful AI assistant for a visually impaired user. 
-Respond to the following user query in a clear, concise, and conversational manner.
-Keep your response brief but helpful.
+    const transcribedText = sttResult.text;
 
-User said: "${transcribedText}"`;
+    // 2) Identify user intent module
+    const detectedModule = await identifyUserIntent(transcribedText);
+    console.log("[pi_audio] Detected module:", detectedModule);
 
-    const geminiResponse = await gemini.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: geminiPrompt
-    });
+    // 3) Generate appropriate response based on detected module
+    //     const geminiPrompt = `You are a helpful AI assistant for a visually impaired user.
+    // The user's intent has been identified as: ${detectedModule}
 
-    const aiResponse = geminiResponse.text || "";
-    console.log("[pi_audio] Gemini response:", aiResponse);
+    // Respond to the following user query in a clear, concise, and conversational manner.
+    // Keep your response brief but helpful. Acknowledge what they want to do and guide them appropriately.
 
-    // 3) Send AI response to FastAPI /tts endpoint to get audio
-    console.log("[pi_audio] Sending to TTS:", `${fastApiUrl}/tts`);
+    // User said: "${transcribedText}"`;
 
-    const ttsResponse = await axios.post(
-      `${fastApiUrl}/tts`,
-      { text: aiResponse },
-      {
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        responseType: 'arraybuffer', // Important: receive binary data
-        timeout: 120000 // 2 minute timeout for TTS generation
-      }
-    );
+    //     const geminiResponse = await gemini.models.generateContent({
+    //       model: "gemini-2.5-flash",
+    //       contents: geminiPrompt
+    //     });
 
-    console.log("[pi_audio] TTS audio received, size:", ttsResponse.data.length);
+    //     const aiResponse = geminiResponse.text || "";
+    //     console.log("[pi_audio] Gemini response:", aiResponse);
 
-    // 4) Return the audio WAV file
+    // 4) Text-to-speech
+    const ttsResult = await textToSpeech(detectedModule);
+
+    if (!ttsResult.audio) {
+      return res.status(502).json({
+        message: "Text-to-speech failed",
+        error: ttsResult.error
+      });
+    }
+
+    // 5) Return the audio WAV file with module info in headers
     res.set({
       'Content-Type': 'audio/wav',
       'Content-Disposition': 'inline; filename=response.wav',
-      'Content-Length': ttsResponse.data.length
+      'Content-Length': ttsResult.audio.length,
+      'X-Detected-Module': detectedModule,
+      'X-Transcribed-Text': encodeURIComponent(transcribedText)
     });
 
-    return res.send(Buffer.from(ttsResponse.data));
+    return res.send(ttsResult.audio);
 
   } catch (error) {
     console.error("[pi_audio] Error:", error.message);
