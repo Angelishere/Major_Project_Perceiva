@@ -364,45 +364,6 @@ app.use("/api/call", callRoutes);
 // Health
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
 
-// Token endpoint
-app.post("/api/zego/token", (req, res) => {
-  try {
-    const roomID = (req.body && req.body.roomID) || "defaultRoom";
-
-    const appID = Number(process.env.ZEGO_APP_ID);
-    const serverSecret = process.env.ZEGO_SERVER_SECRET;
-    const expire = Number(process.env.ZEGO_TOKEN_EXPIRES) || 3600;
-    const userID = "user_" + uuidv4(); // less predictable
-
-    if (!appID || !serverSecret) {
-      return res.status(500).json({ error: "Missing ZEGO_APP_ID or ZEGO_SERVER_SECRET" });
-    }
-
-    const token = generateToken04(appID, userID, serverSecret, expire);
-    const tokenStr = token.toString ? token.toString() : String(token);
-
-    console.log("Token generated:", {
-      appID,
-      userID,
-      tokenType: typeof token,
-      tokenLength: tokenStr.length,
-      tokenPreview: tokenStr.slice(0, 80),
-      tokenFull: tokenStr, // Log full token for debugging
-      roomID
-    });
-
-    return res.json({
-      appID,
-      userID,
-      token: tokenStr,
-      roomID
-    });
-  } catch (err) {
-    console.error("Token generation error:", err);
-    return res.status(500).json({ error: "internal_error", details: err.message });
-  }
-});
-
 app.post("/register", async (req, res) => {
   try {
     const { name, username, email, password, role } = req.body;
@@ -571,57 +532,6 @@ app.put("/api/profile", authMiddleware, async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
-
-
-app.post("/medical-check", upload.single("image"), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ message: "No image uploaded", error: "Image file is required" });
-    }
-    if (!process.env.OPENAI_API_KEY) {
-      return res.status(500).json({ message: "Missing OPENAI_API_KEY" });
-    }
-    if (!process.env.SERPAPI_KEY) {
-      return res.status(500).json({ message: "Missing SERPAPI_KEY" });
-    }
-
-    // 1) Let GPT name the product from the image
-    const productName = await identifyProductWithGPT(req.file.buffer, req.file.mimetype || "image/jpeg");
-    if (!productName) {
-      return res.status(502).json({ message: "Could not identify product from image" });
-    }
-
-    // 2) Fetch ingredient info via SerpApi
-    const query = `${productName} ingredients and contain any allergens?`;
-    console.log("[INFO] GPT identified:", productName);
-    console.log("[INFO] Querying SerpApi with:", query);
-
-    const data = await searchSerpApi(query);
-    if (!data) {
-      return res.status(502).json({ message: "Failed to retrieve ingredient information", error: "No data from SerpApi" });
-    }
-
-    // 3) Extract ingredients/allergens using Gemini
-    console.log("[INFO] Extracting ingredients with Gemini...");
-    const result = await extractIngredientsWithGemini(data, productName);
-
-    return res.status(200).json({
-      message: "Medical check completed successfully",
-      product_name: productName,
-      ingredients: result.ingredients,
-      allergens: result.allergens,
-      warnings: result.warnings,
-      summary: {
-        total_ingredients: result.total_ingredients,
-        allergens_detected: result.allergen_count
-      }
-    });
-  } catch (error) {
-    console.error("Medical check error:", error);
-    res.status(500).json({ message: "Server error during medical check", error: error.message });
-  }
-});
-
 
 app.post("/identify-product", upload.single("image"), async (req, res) => {
   try {
