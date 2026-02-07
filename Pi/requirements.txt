@@ -1,0 +1,9 @@
+# Perceiva - Raspberry Pi Client Dependencies
+# Install with: pip install -r requirements.txt
+
+# HTTP client for server communication
+requests>=2.28.0
+
+# GPIO library for touch sensor (Pi only)
+# This is pre-installed on Raspberry Pi OS, but listed for completeness
+RPi.GPIO>=0.7.0
