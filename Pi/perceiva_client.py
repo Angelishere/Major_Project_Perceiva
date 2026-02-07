@@ -29,6 +29,22 @@ import tempfile
 import subprocess
 import requests
 from pathlib import Path
+import asyncio
+import numpy as np
+
+try:
+    import pyaudio
+    PYAUDIO_AVAILABLE = True
+except ImportError:
+    print("Warning: pyaudio not available. Audio streaming disabled.")
+    PYAUDIO_AVAILABLE = False
+
+try:
+    from livekit import rtc
+    LIVEKIT_AVAILABLE = True
+except ImportError:
+    print("Warning: livekit-rtc not available. Video call features disabled.")
+    LIVEKIT_AVAILABLE = False
 
 try:
     import RPi.GPIO as GPIO
@@ -52,7 +68,7 @@ except ImportError:
 SERVER_URL = os.environ.get("PERCEIVA_SERVER_URL", "http://192.168.85.134:4000")
 PI_INTENT_ENDPOINT = f"{SERVER_URL}/pi_intent"
 MEDICAL_CHECK_ENDPOINT = f"{SERVER_URL}/medical-check"
-AUTH_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2OTdhMWM2NzcyMGRhYTliYzBkYjMzZGQiLCJ1c2VybmFtZSI6ImFyanVuIiwicm9sZSI6ImJsaW5kIiwiaWF0IjoxNzcwNDQ4MTQ4LCJleHAiOjE3NzA0NTE3NDh9.Ax1n2ifk2UnW3cs4D7wgXuM5zQaiOJ-jPPQUWe3Sjpg"  # JWT token for authentication
+AUTH_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2OTdhMWM2NzcyMGRhYTliYzBkYjMzZGQiLCJ1c2VybmFtZSI6ImFyanVuIiwicm9sZSI6ImJsaW5kIiwiaWF0IjoxNzcwNDUyNzAyLCJleHAiOjE3NzA0NTYzMDJ9.s9wa_D7N1nPaaFHZp6VGFyEEgUyrx48sYx8n4TM8lyk"  # JWT token for authentication
 
 # GPIO Configuration
 TOUCH_SENSOR_PIN = 17  # GPIO17 (Pin 11) - TTP223 OUT
@@ -71,6 +87,15 @@ SILENCE_THRESHOLD = 2.0      # Release touch for this long to stop (seconds)
 
 # Audio Playback
 PLAYBACK_COMMAND = "paplay"  # PulseAudio playback (routes to Bluetooth A2DP)
+
+# LiveKit Video Call Configuration
+BACKEND_URL = os.environ.get("PERCEIVA_BACKEND_URL", "https://major-project-perceiva.onrender.com")
+VIDEO_WIDTH = 960
+VIDEO_HEIGHT = 540
+VIDEO_FPS = 24
+LIVEKIT_AUDIO_RATE = 16000
+LIVEKIT_AUDIO_CHANNELS = 2
+LIVEKIT_AUDIO_CHUNK = 320  # 20ms @ 16kHz
 
 # =============================================================================
 # Audio Recording Functions
@@ -371,6 +396,298 @@ def send_image_to_medical_check(image_path: str) -> bytes:
 
 
 # =============================================================================
+# LiveKit Video Call Functions
+# =============================================================================
+
+# Global audio player for remote audio
+audio_player = None
+
+
+async def capture_audio_for_livekit(audio_source):
+    """Capture audio from INMP441 and send to LiveKit"""
+    if not PYAUDIO_AVAILABLE:
+        print("[LiveKit] pyaudio not available")
+        return
+    
+    pa = pyaudio.PyAudio()
+    
+    stream = pa.open(
+        format=pyaudio.paInt16,
+        channels=LIVEKIT_AUDIO_CHANNELS,
+        rate=LIVEKIT_AUDIO_RATE,
+        input=True,
+        frames_per_buffer=LIVEKIT_AUDIO_CHUNK,
+    )
+    
+    print("🎤 [LiveKit] INMP441 mic started")
+    
+    try:
+        while True:
+            data = stream.read(LIVEKIT_AUDIO_CHUNK, exception_on_overflow=False)
+            
+            frame = rtc.AudioFrame(
+                data=data,
+                sample_rate=LIVEKIT_AUDIO_RATE,
+                num_channels=LIVEKIT_AUDIO_CHANNELS,
+                samples_per_channel=LIVEKIT_AUDIO_CHUNK,
+            )
+            await audio_source.capture_frame(frame)
+            
+    finally:
+        stream.stop_stream()
+        stream.close()
+        pa.terminate()
+
+
+def start_bluetooth_player():
+    """Start PulseAudio player for Bluetooth output"""
+    global audio_player
+    
+    # pacat routes to default PulseAudio sink (Bluetooth A2DP)
+    audio_player = subprocess.Popen(
+        [
+            "pacat",
+            "--playback",
+            "--rate", "48000",  # LiveKit typically sends 48kHz
+            "--channels", "1",   # Mono
+            "--format", "s16le",
+            "--latency-msec", "100"
+        ],
+        stdin=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL
+    )
+    print("🔊 [LiveKit] Bluetooth audio player started")
+
+
+def on_audio_track(track, publication, participant):
+    """Receive remote audio and play through Bluetooth (A2DP)"""
+    print(f"🔊 [LiveKit] Receiving audio from {participant.identity}")
+    
+    async def play():
+        # Must use AudioStream to iterate frames
+        audio_stream = rtc.AudioStream(track)
+        async for event in audio_stream:
+            if audio_player and audio_player.stdin:
+                try:
+                    # Get frame from event
+                    frame = event.frame
+                    # Send audio data directly to pacat stdin
+                    audio_player.stdin.write(frame.data)
+                    audio_player.stdin.flush()
+                except:
+                    pass
+    
+    asyncio.create_task(play())
+
+
+async def initiate_video_call():
+    """
+    Main async function to initiate and manage a LiveKit video call with a volunteer.
+    
+    Returns:
+        True if call completed successfully, False otherwise
+    """
+    global audio_player
+    
+    if not LIVEKIT_AVAILABLE:
+        print("[VideoCall] LiveKit not available")
+        return False
+    
+    if not CAMERA_AVAILABLE:
+        print("[VideoCall] Camera not available")
+        return False
+    
+    print("📞 [VideoCall] Initiating volunteer call...")
+    
+    headers = {"Authorization": f"Bearer {AUTH_TOKEN}"}
+    
+    # Initialize variables for cleanup
+    room_id = None
+    picam = None
+    room = None
+    
+    try:
+        # ===== Request volunteer =====
+        print("[VideoCall] Requesting volunteer...")
+        resp = requests.post(
+            f"{BACKEND_URL}/api/call/request-volunteer",
+            headers=headers,
+            timeout=10,
+        )
+        data = resp.json()
+        
+        if not data.get("success"):
+            print("❌ [VideoCall] No volunteers available")
+            return False
+        
+        room_id = data["roomID"]
+        volunteer = data["volunteer"]
+        print(f"✅ [VideoCall] Volunteer: {volunteer['username']}")
+        
+        # ===== Get LiveKit token =====
+        print("[VideoCall] Getting LiveKit room token...")
+        resp = requests.post(
+            f"{BACKEND_URL}/api/call/get-room",
+            json={"targetUserId": volunteer["_id"]},
+            headers=headers,
+            timeout=10,
+        )
+        lk = resp.json()
+        livekit_url, token = lk["livekitUrl"], lk["token"]
+        
+        # ===== Initialize Camera =====
+        print("[VideoCall] Initializing camera...")
+        picam = Picamera2()
+        config = picam.create_preview_configuration(
+            main={"size": (VIDEO_WIDTH, VIDEO_HEIGHT), "format": "XBGR8888"}
+        )
+        config["buffer_count"] = 3
+        picam.configure(config)
+        picam.start()
+        
+        # ===== LiveKit room =====
+        room = rtc.Room()
+        room.on("track_subscribed")(
+            lambda track, pub, part:
+                on_audio_track(track, pub, part)
+                if track.kind == rtc.TrackKind.KIND_AUDIO else None
+        )
+        
+        print("🔗 [VideoCall] Connecting to LiveKit...")
+        await room.connect(livekit_url, token)
+        print("✅ [VideoCall] Connected")
+        
+        # Start Bluetooth audio player
+        start_bluetooth_player()
+        
+        # ===== Publish video =====
+        video_source = rtc.VideoSource(VIDEO_WIDTH, VIDEO_HEIGHT)
+        video_track = rtc.LocalVideoTrack.create_video_track(
+            "pi_cam", video_source
+        )
+        
+        await room.local_participant.publish_track(
+            video_track,
+            rtc.TrackPublishOptions(
+                source=rtc.TrackSource.SOURCE_CAMERA,
+                video_encoding=rtc.VideoEncoding(
+                    max_bitrate=1_500_000,
+                    max_framerate=VIDEO_FPS,
+                ),
+            ),
+        )
+        print("📷 [VideoCall] Video streaming")
+        
+        # ===== Publish audio =====
+        audio_source = rtc.AudioSource(LIVEKIT_AUDIO_RATE, LIVEKIT_AUDIO_CHANNELS)
+        audio_track = rtc.LocalAudioTrack.create_audio_track(
+            "inmp441", audio_source
+        )
+        
+        await room.local_participant.publish_track(
+            audio_track,
+            rtc.TrackPublishOptions(
+                source=rtc.TrackSource.SOURCE_MICROPHONE
+            ),
+        )
+        print("🎤 [VideoCall] Audio streaming")
+        
+        asyncio.create_task(capture_audio_for_livekit(audio_source))
+        
+        # ===== Main video loop =====
+        print("[VideoCall] Call active. Touch sensor to end call.")
+        call_active = True
+        last_touch_check = time.time()
+        
+        try:
+            while call_active:
+                # Capture and send video frame
+                frame = picam.capture_array()
+                
+                video_source.capture_frame(
+                    rtc.VideoFrame(
+                        VIDEO_WIDTH,
+                        VIDEO_HEIGHT,
+                        rtc.VideoBufferType.RGBA,
+                        frame.tobytes(),
+                    )
+                )
+                
+                # Check touch sensor every 100ms to end call
+                if time.time() - last_touch_check >= 0.1:
+                    if GPIO:
+                        # Real hardware: check GPIO pin
+                        if GPIO.input(TOUCH_SENSOR_PIN) == GPIO.HIGH:
+                            print("[VideoCall] Touch detected - ending call...")
+                            time.sleep(0.3)  # Debounce
+                            call_active = False
+                    # In simulation mode, call continues until Ctrl+C
+                    last_touch_check = time.time()
+                
+                await asyncio.sleep(1 / VIDEO_FPS)
+                
+        except KeyboardInterrupt:
+            print("⏹️ [VideoCall] Keyboard interrupt - ending call...")
+        
+    except requests.exceptions.RequestException as e:
+        print(f"❌ [VideoCall] Network error: {e}")
+        return False
+    except Exception as e:
+        print(f"❌ [VideoCall] Error: {e}")
+        return False
+    
+    finally:
+        # Cleanup
+        print("[VideoCall] Cleaning up...")
+        
+        # Stop audio player
+        if audio_player:
+            try:
+                audio_player.stdin.close()
+            except:
+                pass
+            audio_player.terminate()
+            try:
+                audio_player.wait(timeout=2)
+            except:
+                audio_player.kill()
+            audio_player = None
+        
+        # End call on backend
+        if room_id:
+            try:
+                requests.post(
+                    f"{BACKEND_URL}/api/call/end-call",
+                    json={"roomID": room_id},
+                    headers=headers,
+                    timeout=5,
+                )
+            except:
+                pass
+        
+        # Stop camera
+        if picam:
+            try:
+                picam.stop()
+                picam.close()  # Must close to fully release camera
+                print("[VideoCall] Camera released")
+            except Exception as e:
+                print(f"[VideoCall] Camera cleanup error: {e}")
+        
+        # Disconnect from LiveKit
+        if room:
+            try:
+                await room.disconnect()
+            except:
+                pass
+        
+        print("👋 [VideoCall] Call ended")
+    
+    return True
+
+
+# =============================================================================
 # Audio Playback Functions
 # =============================================================================
 
@@ -570,6 +887,24 @@ def process_single_interaction():
             
             if audio_response is None:
                 print("[Workflow] Medical check failed")
+                return False
+        
+        elif action_command == "INITIATE_VIDEO_CALL":
+            print("[Workflow] Video call requested")
+            
+            # Run async video call in event loop
+            try:
+                success = asyncio.run(initiate_video_call())
+                if not success:
+                    print("[Workflow] Video call failed or no volunteers available")
+                else:
+                    print("[Workflow] Video call completed")
+                
+                # No audio response to play after video call
+                return success
+                
+            except Exception as e:
+                print(f"[Workflow] Video call error: {e}")
                 return False
         
         else:
