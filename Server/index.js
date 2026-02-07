@@ -133,11 +133,7 @@ async function getConsumabilityAdviceWithGemini({
   medicalProfile
 }) {
   if (!Array.isArray(serpData) || serpData.length === 0) {
-    return {
-      isSafe: false,
-      advice: "Insufficient ingredient information available",
-      risks: []
-    };
+    return "Insufficient ingredient information available for this product. Please consult a healthcare professional before consuming.";
   }
 
   // Convert SERP objects into readable text
@@ -189,18 +185,12 @@ Return ONLY the medical advice.
 
     const rawText = response.text || "";
 
-    const jsonMatch = rawText.match(/```json\s*([\s\S]*?)```/);
-    const jsonText = jsonMatch ? jsonMatch[1] : rawText;
-
-    return JSON.parse(jsonText);
+    // Return the plain text advice directly
+    return rawText.trim();
 
   } catch (err) {
     console.error("❌ Gemini consumability error:", err.message);
-    return {
-      isSafe: false,
-      risks: ["Unable to verify product safety"],
-      advice: "Please consult a healthcare professional before consuming"
-    };
+    return "I'm unable to analyze this product at the moment. Please consult a healthcare professional before consuming.";
   }
 }
 
@@ -338,6 +328,7 @@ async function speechToText(audioBuffer, filename = 'audio.wav', mimeType = 'aud
 async function textToSpeech(text) {
   const fastApiUrl = process.env.FASTAPI_URL || 'http://localhost:8000';
   console.log("[textToSpeech] Sending to TTS:", `${fastApiUrl}/tts`);
+  console.log("[textToSpeech] Text to convert:", text);
 
   try {
     const response = await axios.post(
@@ -356,6 +347,10 @@ async function textToSpeech(text) {
     return { audio: Buffer.from(response.data) };
   } catch (error) {
     console.error("[textToSpeech] Error:", error.message);
+    if (error.response) {
+      console.error("[textToSpeech] Status:", error.response.status);
+      console.error("[textToSpeech] Response data:", error.response.data?.toString());
+    }
     return { audio: null, error: error.message };
   }
 }
@@ -585,7 +580,7 @@ app.post("/identify-product", upload.single("image"), async (req, res) => {
   }
 });
 
-app.post("/medical-check2", authMiddleware, upload.single("image"), async (req, res) => {
+app.post("/medical-check", authMiddleware, upload.single("image"), async (req, res) => {
   try {
 
     if (!req.file) {
@@ -665,19 +660,32 @@ app.post("/medical-check2", authMiddleware, upload.single("image"), async (req, 
       medicalProfile: blindProfile
     });
 
+    console.log("[medical-check] AI advice received:", aiAdvice);
+
     // -----------------------------
-    // Final response
+    // Convert advice to audio
     // -----------------------------
-    return res.status(200).json({
-      message: "Medical check completed successfully",
-      product_name: productName,
-      medical_profile_used: {
-        allergies: blindProfile.allergies,
-        medicalConditions: blindProfile.medicalConditions,
-        dietaryPreferences: blindProfile.dietaryPreferences
-      },
-      ai_advice: aiAdvice
+    const ttsResult = await textToSpeech(aiAdvice);
+
+    if (!ttsResult.audio) {
+      return res.status(502).json({
+        message: "Text-to-speech conversion failed",
+        error: ttsResult.error
+      });
+    }
+
+    // -----------------------------
+    // Return audio response
+    // -----------------------------
+    res.set({
+      'Content-Type': 'audio/wav',
+      'Content-Disposition': 'inline; filename=medical_advice.wav',
+      'Content-Length': ttsResult.audio.length,
+      'X-Product-Name': encodeURIComponent(productName),
+      'X-User-Id': userId
     });
+
+    return res.send(ttsResult.audio);
 
   } catch (error) {
     console.error("Medical check error:", error);
@@ -703,6 +711,93 @@ const audioUpload = multer({
     }
   }
 });
+
+app.post("/pi_intent", authMiddleware, audioUpload.single("audio"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: "No audio file uploaded", error: "Audio file is required" });
+    }
+
+    console.log("[pi_intent] Received audio file:", req.file.originalname, "Size:", req.file.size);
+
+    // 1) Speech-to-text
+    const sttResult = await speechToText(
+      req.file.buffer,
+      req.file.originalname || 'audio.wav',
+      req.file.mimetype || 'audio/wav'
+    );
+
+    if (!sttResult.text) {
+      return res.status(502).json({
+        message: "Speech-to-text failed",
+        error: sttResult.error
+      });
+    }
+
+    const transcribedText = sttResult.text;
+
+    // 2) Identify user intent module
+    const detectedModule = await identifyUserIntent(transcribedText);
+    console.log("[pi_intent] Detected module:", detectedModule);
+
+    // 3) Map module to action command for Pi
+    let actionCommand = "";
+    let requiresImage = false;
+
+    switch (detectedModule) {
+      case "Product Identification Module":
+        actionCommand = "CAPTURE_PRODUCT_IMAGE";
+        requiresImage = true;
+        break;
+      case "Medical Compatibility Module":
+        actionCommand = "CAPTURE_MEDICAL_IMAGE";
+        requiresImage = true;
+        break;
+      case "Currency Recognition Module":
+        actionCommand = "CAPTURE_CURRENCY_IMAGE";
+        requiresImage = true;
+        break;
+      case "Price Comparison Module":
+        actionCommand = "CAPTURE_PRICE_IMAGE";
+        requiresImage = true;
+        break;
+      case "Volunteer Video Call Module":
+        actionCommand = "INITIATE_VIDEO_CALL";
+        requiresImage = false;
+        break;
+      case "AI Assistance Module":
+      default:
+        actionCommand = "AI_CONVERSATION";
+        requiresImage = false;
+        break;
+    }
+
+    // 4) Return command to Pi
+    return res.status(200).json({
+      message: "Intent identified successfully",
+      transcribed_text: transcribedText,
+      detected_module: detectedModule,
+      action_command: actionCommand,
+      requires_image: requiresImage,
+      user_id: req.user.userId
+    });
+
+  } catch (error) {
+    console.error("[pi_intent] Error:", error.message);
+
+    if (error.code === 'ECONNREFUSED') {
+      return res.status(503).json({
+        message: "FastAPI service unavailable",
+        error: "Could not connect to speech-to-text service"
+      });
+    }
+
+    return res.status(500).json({
+      message: "Error processing audio",
+      error: error.message
+    });
+  }
+})
 
 app.post("/pi_audio", audioUpload.single("audio"), async (req, res) => {
   try {

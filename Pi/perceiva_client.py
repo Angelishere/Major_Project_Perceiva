@@ -5,14 +5,19 @@ Perceiva - Touch-Triggered Audio Client for Raspberry Pi Zero 2 W
 Hardware Setup:
 - INMP441 I²S MEMS Microphone (recording)
 - TTP223 Capacitive Touch Sensor on GPIO17 (trigger)
+- Raspberry Pi Camera Module (image capture)
 - Bluetooth TWS (soundcore V20i) via PulseAudio A2DP (playback)
 
 Workflow:
 1. Wait for touch sensor activation (GPIO17 HIGH)
 2. Record audio from INMP441 mic via ALSA
-3. Send audio to Node.js server (/pi_audio endpoint)
-4. Receive TTS audio response
-5. Play audio through Bluetooth via PulseAudio
+3. Send audio to Node.js server (/pi_intent endpoint) with JWT auth
+4. Receive intent command (e.g., CAPTURE_MEDICAL_IMAGE)
+5. If medical check requested:
+   - Capture product image via Pi Camera
+   - Send to /medical-check endpoint with JWT auth
+   - Receive medical advice as TTS audio
+6. Play audio response through Bluetooth via PulseAudio
 """
 
 import os
@@ -31,13 +36,23 @@ except ImportError:
     print("Warning: RPi.GPIO not available. Running in simulation mode.")
     GPIO = None
 
+try:
+    from picamera2 import Picamera2
+    CAMERA_AVAILABLE = True
+except ImportError:
+    print("Warning: Picamera2 not available. Camera features disabled.")
+    Picamera2 = None
+    CAMERA_AVAILABLE = False
+
 # =============================================================================
 # Configuration
 # =============================================================================
 
 # Server Configuration
 SERVER_URL = os.environ.get("PERCEIVA_SERVER_URL", "http://192.168.85.134:4000")
-PI_AUDIO_ENDPOINT = f"{SERVER_URL}/pi_audio"
+PI_INTENT_ENDPOINT = f"{SERVER_URL}/pi_intent"
+MEDICAL_CHECK_ENDPOINT = f"{SERVER_URL}/medical-check"
+AUTH_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2OTdhMWM2NzcyMGRhYTliYzBkYjMzZGQiLCJ1c2VybmFtZSI6ImFyanVuIiwicm9sZSI6ImJsaW5kIiwiaWF0IjoxNzcwNDQ4MTQ4LCJleHAiOjE3NzA0NTE3NDh9.Ax1n2ifk2UnW3cs4D7wgXuM5zQaiOJ-jPPQUWe3Sjpg"  # JWT token for authentication
 
 # GPIO Configuration
 TOUCH_SENSOR_PIN = 17  # GPIO17 (Pin 11) - TTP223 OUT
@@ -179,17 +194,27 @@ def record_with_touch_trigger(output_path: str) -> bool:
 # Server Communication
 # =============================================================================
 
-def send_audio_to_server(audio_path: str) -> tuple[bytes, dict]:
+def send_audio_to_server(audio_path: str) -> dict:
     """
-    Send recorded audio to the Node.js server and receive TTS response.
+    Send recorded audio to the Node.js server (/pi_intent) and receive intent command.
     
     Args:
         audio_path: Path to the recorded WAV file
     
     Returns:
-        Tuple of (audio_bytes, headers_dict) or (None, None) on failure
+        Dict with intent information or None on failure
+        {
+            'action_command': str,
+            'detected_module': str,
+            'transcribed_text': str,
+            'requires_image': bool
+        }
     """
-    print(f"[Server] Sending audio to {PI_AUDIO_ENDPOINT}")
+    print(f"[Server] Sending audio to {PI_INTENT_ENDPOINT}")
+    
+    if not AUTH_TOKEN:
+        print("[Server] ERROR: No AUTH_TOKEN set. Please set PERCEIVA_AUTH_TOKEN environment variable.")
+        return None
     
     try:
         with open(audio_path, 'rb') as audio_file:
@@ -197,9 +222,14 @@ def send_audio_to_server(audio_path: str) -> tuple[bytes, dict]:
                 'audio': ('recording.wav', audio_file, 'audio/wav')
             }
             
+            headers = {
+                'Authorization': f'Bearer {AUTH_TOKEN}'
+            }
+            
             response = requests.post(
-                PI_AUDIO_ENDPOINT,
+                PI_INTENT_ENDPOINT,
                 files=files,
+                headers=headers,
                 timeout=120  # 2 minute timeout for processing
             )
         
@@ -210,32 +240,134 @@ def send_audio_to_server(audio_path: str) -> tuple[bytes, dict]:
                 print(f"[Server] Error details: {error_json}")
             except:
                 print(f"[Server] Response: {response.text[:200]}")
-            return None, None
+            return None
         
-        # Extract headers
-        headers = {
-            'detected_module': response.headers.get('X-Detected-Module', 'Unknown'),
-            'transcribed_text': requests.utils.unquote(
-                response.headers.get('X-Transcribed-Text', '')
-            )
-        }
+        # Parse JSON response
+        intent_data = response.json()
         
         print(f"[Server] Success!")
-        print(f"  - Detected Module: {headers['detected_module']}")
-        print(f"  - Transcribed: {headers['transcribed_text']}")
-        print(f"  - Audio size: {len(response.content)} bytes")
+        print(f"  - Action Command: {intent_data.get('action_command', 'Unknown')}")
+        print(f"  - Detected Module: {intent_data.get('detected_module', 'Unknown')}")
+        print(f"  - Transcribed: {intent_data.get('transcribed_text', '')}")
+        print(f"  - Requires Image: {intent_data.get('requires_image', False)}")
         
-        return response.content, headers
+        return intent_data
         
     except requests.exceptions.Timeout:
         print("[Server] Request timed out")
-        return None, None
+        return None
     except requests.exceptions.ConnectionError:
         print(f"[Server] Connection error - is the server running at {SERVER_URL}?")
-        return None, None
+        return None
     except Exception as e:
         print(f"[Server] Exception: {e}")
-        return None, None
+        return None
+
+
+def capture_image(output_path: str) -> bool:
+    """
+    Capture an image using the Raspberry Pi camera.
+    
+    Args:
+        output_path: Path to save the captured image (JPEG)
+    
+    Returns:
+        True if capture was successful, False otherwise
+    """
+    if not CAMERA_AVAILABLE:
+        print("[Camera] Picamera2 not available")
+        return False
+    
+    try:
+        print("[Camera] Initializing camera...")
+        picam = Picamera2()
+        
+        # Configure for still image capture
+        config = picam.create_still_configuration()
+        picam.configure(config)
+        
+        print("[Camera] Starting camera...")
+        picam.start()
+        
+        # Allow camera to warm up
+        time.sleep(2)
+        
+        print(f"[Camera] Capturing image to {output_path}...")
+        picam.capture_file(output_path)
+        
+        picam.stop()
+        picam.close()
+        
+        print("[Camera] Image captured successfully")
+        return os.path.exists(output_path) and os.path.getsize(output_path) > 0
+        
+    except Exception as e:
+        print(f"[Camera] Exception: {e}")
+        return False
+
+
+def send_image_to_medical_check(image_path: str) -> bytes:
+    """
+    Send image to /medical-check endpoint and receive audio advice.
+    
+    Args:
+        image_path: Path to the image file
+    
+    Returns:
+        Audio bytes (WAV) or None on failure
+    """
+    print(f"[MedicalCheck] Sending image to {MEDICAL_CHECK_ENDPOINT}")
+    
+    if not AUTH_TOKEN:
+        print("[MedicalCheck] ERROR: No AUTH_TOKEN set")
+        return None
+    
+    try:
+        with open(image_path, 'rb') as image_file:
+            files = {
+                'image': ('product.jpg', image_file, 'image/jpeg')
+            }
+            
+            headers = {
+                'Authorization': f'Bearer {AUTH_TOKEN}'
+            }
+            
+            response = requests.post(
+                MEDICAL_CHECK_ENDPOINT,
+                files=files,
+                headers=headers,
+                timeout=120  # 2 minute timeout
+            )
+        
+        if response.status_code != 200:
+            print(f"[MedicalCheck] Error: HTTP {response.status_code}")
+            try:
+                error_json = response.json()
+                print(f"[MedicalCheck] Error details: {error_json}")
+            except:
+                print(f"[MedicalCheck] Response: {response.text[:200]}")
+            return None
+        
+        # Extract product info from headers
+        product_name = requests.utils.unquote(
+            response.headers.get('X-Product-Name', 'Unknown')
+        )
+        
+        print(f"[MedicalCheck] Success!")
+        print(f"  - Product Name: {product_name}")
+        print(f"  - Audio size: {len(response.content)} bytes")
+        
+        return response.content
+        
+    except requests.exceptions.Timeout:
+        print("[MedicalCheck] Request timed out")
+        return None
+    except requests.exceptions.ConnectionError:
+        print(f"[MedicalCheck] Connection error - is the server running?")
+        return None
+    except Exception as e:
+        print(f"[MedicalCheck] Exception: {e}")
+        return None
 
 
 # =============================================================================
@@ -379,8 +511,9 @@ def process_single_interaction():
     """
     Handle a single touch-triggered interaction:
     1. Record audio while touch is held
-    2. Send to server
-    3. Play response
+    2. Send to /pi_intent to get command
+    3. If CAPTURE_MEDICAL_IMAGE, capture image and send to /medical-check
+    4. Play response audio
     
     Returns:
         True if successful, False otherwise
@@ -389,8 +522,10 @@ def process_single_interaction():
     with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_file:
         recording_path = tmp_file.name
     
+    image_path = None
+    
     try:
-        # Record audio
+        # Step 1: Record audio
         success = record_with_touch_trigger(recording_path)
         
         if not success:
@@ -404,28 +539,68 @@ def process_single_interaction():
             print("[Workflow] Recording too short, ignoring")
             return False
         
-        # Send to server
-        audio_response, headers = send_audio_to_server(recording_path)
+        # Step 2: Send audio to /pi_intent
+        intent_data = send_audio_to_server(recording_path)
         
-        if audio_response is None:
+        if intent_data is None:
             print("[Workflow] Server communication failed")
             return False
         
-        # Play response
-        success = play_audio_pulseaudio(audio_response)
+        action_command = intent_data.get('action_command', '')
         
-        if not success:
-            print("[Workflow] Playback failed")
-            return False
+        # Step 3: Handle command-specific actions
+        audio_response = None
+        
+        if action_command == "CAPTURE_MEDICAL_IMAGE":
+            print("[Workflow] Medical compatibility check requested")
+            
+            # Create temp file for image
+            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_img:
+                image_path = tmp_img.name
+            
+            # Capture image
+            print("[Workflow] Capturing product image...")
+            if not capture_image(image_path):
+                print("[Workflow] Image capture failed")
+                return False
+            
+            # Send image to medical-check endpoint
+            print("[Workflow] Sending image for medical analysis...")
+            audio_response = send_image_to_medical_check(image_path)
+            
+            if audio_response is None:
+                print("[Workflow] Medical check failed")
+                return False
+        
+        else:
+            # For other commands, we would handle them here
+            # For now, just inform the user
+            print(f"[Workflow] Command '{action_command}' recognized but not yet implemented")
+            # You might want to return here or provide a default response
+            return True
+        
+        # Step 4: Play response audio
+        if audio_response:
+            success = play_audio_pulseaudio(audio_response)
+            
+            if not success:
+                print("[Workflow] Playback failed")
+                return False
         
         return True
         
     finally:
-        # Clean up recording
+        # Clean up temporary files
         try:
             os.unlink(recording_path)
         except:
             pass
+        
+        if image_path:
+            try:
+                os.unlink(image_path)
+            except:
+                pass
 
 
 def main():
