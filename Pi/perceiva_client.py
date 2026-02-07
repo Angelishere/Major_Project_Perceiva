@@ -68,7 +68,7 @@ except ImportError:
 SERVER_URL = os.environ.get("PERCEIVA_SERVER_URL", "http://192.168.85.134:4000")
 PI_INTENT_ENDPOINT = f"{SERVER_URL}/pi_intent"
 MEDICAL_CHECK_ENDPOINT = f"{SERVER_URL}/medical-check"
-AUTH_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2OTdhMWM2NzcyMGRhYTliYzBkYjMzZGQiLCJ1c2VybmFtZSI6ImFyanVuIiwicm9sZSI6ImJsaW5kIiwiaWF0IjoxNzcwNDUyNzAyLCJleHAiOjE3NzA0NTYzMDJ9.s9wa_D7N1nPaaFHZp6VGFyEEgUyrx48sYx8n4TM8lyk"  # JWT token for authentication
+AUTH_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2OTdhMWM2NzcyMGRhYTliYzBkYjMzZGQiLCJ1c2VybmFtZSI6ImFyanVuIiwicm9sZSI6ImJsaW5kIiwiaWF0IjoxNzcwNDY2MTM5LCJleHAiOjE3NzA0Njk3Mzl9.v9h6lOkW5VvWgsbLSPQMpC_QCGxWfYBbEMAby_OsjwE"  # JWT token for authentication
 
 # GPIO Configuration
 TOUCH_SENSOR_PIN = 17  # GPIO17 (Pin 11) - TTP223 OUT
@@ -227,13 +227,22 @@ def send_audio_to_server(audio_path: str) -> dict:
         audio_path: Path to the recorded WAV file
     
     Returns:
-        Dict with intent information or None on failure
+        Dict with intent information or audio data:
+        For commands requiring action:
         {
             'action_command': str,
             'detected_module': str,
             'transcribed_text': str,
             'requires_image': bool
         }
+        For AI conversation:
+        {
+            'action_command': 'AI_CONVERSATION',
+            'audio_response': bytes,
+            'detected_module': str,
+            'transcribed_text': str
+        }
+        Returns None on failure
     """
     print(f"[Server] Sending audio to {PI_INTENT_ENDPOINT}")
     
@@ -267,16 +276,40 @@ def send_audio_to_server(audio_path: str) -> dict:
                 print(f"[Server] Response: {response.text[:200]}")
             return None
         
-        # Parse JSON response
-        intent_data = response.json()
+        # Check if response is audio (AI_CONVERSATION) or JSON (other commands)
+        content_type = response.headers.get('Content-Type', '')
         
-        print(f"[Server] Success!")
-        print(f"  - Action Command: {intent_data.get('action_command', 'Unknown')}")
-        print(f"  - Detected Module: {intent_data.get('detected_module', 'Unknown')}")
-        print(f"  - Transcribed: {intent_data.get('transcribed_text', '')}")
-        print(f"  - Requires Image: {intent_data.get('requires_image', False)}")
-        
-        return intent_data
+        if 'audio' in content_type:
+            # Audio response - AI conversation
+            action_command = response.headers.get('X-Action-Command', 'AI_CONVERSATION')
+            detected_module = response.headers.get('X-Detected-Module', 'Unknown')
+            transcribed_text = requests.utils.unquote(
+                response.headers.get('X-Transcribed-Text', '')
+            )
+            
+            print(f"[Server] Success! (Audio Response)")
+            print(f"  - Action Command: {action_command}")
+            print(f"  - Detected Module: {detected_module}")
+            print(f"  - Transcribed: {transcribed_text}")
+            print(f"  - Audio size: {len(response.content)} bytes")
+            
+            return {
+                'action_command': action_command,
+                'audio_response': response.content,
+                'detected_module': detected_module,
+                'transcribed_text': transcribed_text
+            }
+        else:
+            # JSON response - command requiring action
+            intent_data = response.json()
+            
+            print(f"[Server] Success! (JSON Response)")
+            print(f"  - Action Command: {intent_data.get('action_command', 'Unknown')}")
+            print(f"  - Detected Module: {intent_data.get('detected_module', 'Unknown')}")
+            print(f"  - Transcribed: {intent_data.get('transcribed_text', '')}")
+            print(f"  - Requires Image: {intent_data.get('requires_image', False)}")
+            
+            return intent_data
         
     except requests.exceptions.Timeout:
         print("[Server] Request timed out")
@@ -906,6 +939,28 @@ def process_single_interaction():
             except Exception as e:
                 print(f"[Workflow] Video call error: {e}")
                 return False
+        
+        elif action_command == "AI_CONVERSATION":
+            print("[Workflow] AI conversation detected")
+            
+            # Audio response is already in the intent_data
+            audio_response = intent_data.get('audio_response')
+            
+            if audio_response is None:
+                print("[Workflow] No audio response received")
+                return False
+            
+            # Play the AI response audio
+            print("[Workflow] Playing AI response...")
+            success = play_audio_pulseaudio(audio_response)
+            
+            if not success:
+                print("[Workflow] Audio playback failed")
+                return False
+            
+            # Return to normal mode
+            print("[Workflow] AI conversation complete")
+            return True
         
         else:
             # For other commands, we would handle them here

@@ -295,7 +295,7 @@ async function speechToText(audioBuffer, filename = 'audio.wav', mimeType = 'aud
     contentType: mimeType
   });
 
-  const fastApiUrl = process.env.FASTAPI_URL || 'http://localhost:8000';
+  const fastApiUrl = process.env.FASTAPI_URL;
   console.log("[speechToText] Sending to FastAPI:", `${fastApiUrl}/stt-upload`);
 
   try {
@@ -326,7 +326,7 @@ async function speechToText(audioBuffer, filename = 'audio.wav', mimeType = 'aud
  * @returns {Promise<{audio: Buffer, error?: string}>}
  */
 async function textToSpeech(text) {
-  const fastApiUrl = process.env.FASTAPI_URL || 'http://localhost:8000';
+  const fastApiUrl = process.env.FASTAPI_URL;
   console.log("[textToSpeech] Sending to TTS:", `${fastApiUrl}/tts`);
   console.log("[textToSpeech] Text to convert:", text);
 
@@ -772,7 +772,59 @@ app.post("/pi_intent", authMiddleware, audioUpload.single("audio"), async (req, 
         break;
     }
 
-    // 4) Return command to Pi
+    // 4) Special handling for AI_CONVERSATION - return audio instead of JSON
+    if (actionCommand === "AI_CONVERSATION") {
+      console.log("[pi_intent] AI conversation mode - generating response");
+
+      // Generate AI response using Gemini
+      const geminiPrompt = `You are a helpful AI assistant for a visually impaired user.
+The user asked: "${transcribedText}"
+
+Respond in a clear, concise, and conversational manner. Keep your response brief but helpful.
+Be friendly and supportive.`;
+
+      try {
+        const geminiResponse = await gemini.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents: geminiPrompt
+        });
+
+        const aiResponse = geminiResponse.text || "I'm here to help. Could you please repeat your question?";
+        console.log("[pi_intent] Gemini response:", aiResponse);
+
+        // Convert to audio
+        const ttsResult = await textToSpeech(aiResponse);
+
+        if (!ttsResult.audio) {
+          return res.status(502).json({
+            message: "Text-to-speech failed",
+            error: ttsResult.error
+          });
+        }
+
+        // Return audio with command in headers
+        res.set({
+          'Content-Type': 'audio/wav',
+          'Content-Disposition': 'inline; filename=ai_response.wav',
+          'Content-Length': ttsResult.audio.length,
+          'X-Action-Command': actionCommand,
+          'X-Detected-Module': detectedModule,
+          'X-Transcribed-Text': encodeURIComponent(transcribedText),
+          'X-Requires-Image': 'false'
+        });
+
+        return res.send(ttsResult.audio);
+
+      } catch (error) {
+        console.error("[pi_intent] AI conversation error:", error.message);
+        return res.status(500).json({
+          message: "AI conversation processing failed",
+          error: error.message
+        });
+      }
+    }
+
+    // 5) For other commands, return JSON as before
     return res.status(200).json({
       message: "Intent identified successfully",
       transcribed_text: transcribedText,
@@ -881,6 +933,8 @@ app.post("/pi_audio", audioUpload.single("audio"), async (req, res) => {
     });
   }
 })
+
+
 
 const port = process.env.PORT || 4000;
 app.listen(port, () => {
