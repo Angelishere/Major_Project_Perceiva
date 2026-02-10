@@ -133,11 +133,7 @@ async function getConsumabilityAdviceWithGemini({
   medicalProfile
 }) {
   if (!Array.isArray(serpData) || serpData.length === 0) {
-    return {
-      isSafe: false,
-      advice: "Insufficient ingredient information available",
-      risks: []
-    };
+    return "Insufficient ingredient information available for this product. Please consult a healthcare professional before consuming.";
   }
 
   // Convert SERP objects into readable text
@@ -189,18 +185,12 @@ Return ONLY the medical advice.
 
     const rawText = response.text || "";
 
-    const jsonMatch = rawText.match(/```json\s*([\s\S]*?)```/);
-    const jsonText = jsonMatch ? jsonMatch[1] : rawText;
-
-    return JSON.parse(jsonText);
+    // Return the plain text advice directly
+    return rawText.trim();
 
   } catch (err) {
     console.error("❌ Gemini consumability error:", err.message);
-    return {
-      isSafe: false,
-      risks: ["Unable to verify product safety"],
-      advice: "Please consult a healthcare professional before consuming"
-    };
+    return "I'm unable to analyze this product at the moment. Please consult a healthcare professional before consuming.";
   }
 }
 
@@ -261,48 +251,113 @@ async function identifyProductWithGPT(imageBuffer, mimeType) {
   return text.trim().replace(/^["']|["']$/g, "");
 }
 
+async function identifyUserIntent(transcribedText) {
+  const intentPrompt = `You are an intent classifier for a visually impaired user assistance application.
+Based on the user's speech, identify which module they want to use.
+
+Available modules:
+1. "Product Identification Module" - User wants to identify/know what a product is
+2. "Medical Compatibility Module" - User wants to check if a product is safe for them medically (allergies, health conditions)
+3. "Price Comparison Module" - User wants to compare prices or find best deals
+4. "Volunteer Video Call Module" - User wants to connect with a volunteer for video assistance
+5. "AI Assistance Module" - User wants general help, questions, or conversation
+6. "Currency Recognition Module" - User wants to identify currency notes or coins, know the denomination of money
+
+Analyze this user speech and respond with ONLY the exact module name from the list above. Nothing else.
+
+User said: "${transcribedText}"`;
+
+  try {
+    const intentResponse = await gemini.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: intentPrompt
+    });
+
+    return (intentResponse.text || "AI Assistance Module").trim();
+  } catch (error) {
+    console.error("[identifyUserIntent] Error:", error.message);
+    return "AI Assistance Module";
+  }
+}
+
+/**
+ * Send audio buffer to FastAPI for speech-to-text transcription
+ * @param {Buffer} audioBuffer - The audio file buffer
+ * @param {string} filename - Original filename
+ * @param {string} mimeType - Audio MIME type
+ * @returns {Promise<{text: string, error?: string}>}
+ */
+async function speechToText(audioBuffer, filename = 'audio.wav', mimeType = 'audio/wav') {
+  const FormData = (await import('form-data')).default;
+  const formData = new FormData();
+  formData.append('file', audioBuffer, {
+    filename: filename,
+    contentType: mimeType
+  });
+
+  const fastApiUrl = process.env.FASTAPI_URL;
+  console.log("[speechToText] Sending to FastAPI:", `${fastApiUrl}/stt-upload`);
+
+  try {
+    const response = await axios.post(`${fastApiUrl}/stt-upload`, formData, {
+      headers: {
+        ...formData.getHeaders()
+      },
+      timeout: 60000 // 60 second timeout
+    });
+
+    const text = response.data?.text;
+    console.log("[speechToText] Transcribed:", text);
+
+    if (!text || text === "Error") {
+      return { text: null, error: response.data?.error || "No transcription returned" };
+    }
+
+    return { text };
+  } catch (error) {
+    console.error("[speechToText] Error:", error.message);
+    return { text: null, error: error.message };
+  }
+}
+
+/**
+ * Send text to FastAPI for text-to-speech synthesis
+ * @param {string} text - Text to convert to speech
+ * @returns {Promise<{audio: Buffer, error?: string}>}
+ */
+async function textToSpeech(text) {
+  const fastApiUrl = process.env.FASTAPI_URL;
+  console.log("[textToSpeech] Sending to TTS:", `${fastApiUrl}/tts`);
+  console.log("[textToSpeech] Text to convert:", text);
+
+  try {
+    const response = await axios.post(
+      `${fastApiUrl}/tts`,
+      { text },
+      {
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        responseType: 'arraybuffer',
+        timeout: 120000 // 2 minute timeout
+      }
+    );
+
+    console.log("[textToSpeech] Audio received, size:", response.data.length);
+    return { audio: Buffer.from(response.data) };
+  } catch (error) {
+    console.error("[textToSpeech] Error:", error.message);
+    if (error.response) {
+      console.error("[textToSpeech] Status:", error.response.status);
+      console.error("[textToSpeech] Response data:", error.response.data?.toString());
+    }
+    return { audio: null, error: error.message };
+  }
+}
+
 app.use("/api/call", callRoutes);
 // Health
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
-
-// Token endpoint
-app.post("/api/zego/token", (req, res) => {
-  try {
-    const roomID = (req.body && req.body.roomID) || "defaultRoom";
-
-    const appID = Number(process.env.ZEGO_APP_ID);
-    const serverSecret = process.env.ZEGO_SERVER_SECRET;
-    const expire = Number(process.env.ZEGO_TOKEN_EXPIRES) || 3600;
-    const userID = "user_" + uuidv4(); // less predictable
-
-    if (!appID || !serverSecret) {
-      return res.status(500).json({ error: "Missing ZEGO_APP_ID or ZEGO_SERVER_SECRET" });
-    }
-
-    const token = generateToken04(appID, userID, serverSecret, expire);
-    const tokenStr = token.toString ? token.toString() : String(token);
-
-    console.log("Token generated:", {
-      appID,
-      userID,
-      tokenType: typeof token,
-      tokenLength: tokenStr.length,
-      tokenPreview: tokenStr.slice(0, 80),
-      tokenFull: tokenStr, // Log full token for debugging
-      roomID
-    });
-
-    return res.json({
-      appID,
-      userID,
-      token: tokenStr,
-      roomID
-    });
-  } catch (err) {
-    console.error("Token generation error:", err);
-    return res.status(500).json({ error: "internal_error", details: err.message });
-  }
-});
 
 app.post("/register", async (req, res) => {
   try {
@@ -473,57 +528,6 @@ app.put("/api/profile", authMiddleware, async (req, res) => {
   }
 });
 
-
-app.post("/medical-check", upload.single("image"), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ message: "No image uploaded", error: "Image file is required" });
-    }
-    if (!process.env.OPENAI_API_KEY) {
-      return res.status(500).json({ message: "Missing OPENAI_API_KEY" });
-    }
-    if (!process.env.SERPAPI_KEY) {
-      return res.status(500).json({ message: "Missing SERPAPI_KEY" });
-    }
-
-    // 1) Let GPT name the product from the image
-    const productName = await identifyProductWithGPT(req.file.buffer, req.file.mimetype || "image/jpeg");
-    if (!productName) {
-      return res.status(502).json({ message: "Could not identify product from image" });
-    }
-
-    // 2) Fetch ingredient info via SerpApi
-    const query = `${productName} ingredients and contain any allergens?`;
-    console.log("[INFO] GPT identified:", productName);
-    console.log("[INFO] Querying SerpApi with:", query);
-
-    const data = await searchSerpApi(query);
-    if (!data) {
-      return res.status(502).json({ message: "Failed to retrieve ingredient information", error: "No data from SerpApi" });
-    }
-
-    // 3) Extract ingredients/allergens using Gemini
-    console.log("[INFO] Extracting ingredients with Gemini...");
-    const result = await extractIngredientsWithGemini(data, productName);
-
-    return res.status(200).json({
-      message: "Medical check completed successfully",
-      product_name: productName,
-      ingredients: result.ingredients,
-      allergens: result.allergens,
-      warnings: result.warnings,
-      summary: {
-        total_ingredients: result.total_ingredients,
-        allergens_detected: result.allergen_count
-      }
-    });
-  } catch (error) {
-    console.error("Medical check error:", error);
-    res.status(500).json({ message: "Server error during medical check", error: error.message });
-  }
-});
-
-
 app.post("/identify-product", upload.single("image"), async (req, res) => {
   try {
     if (!req.file) {
@@ -576,7 +580,7 @@ app.post("/identify-product", upload.single("image"), async (req, res) => {
   }
 });
 
-app.post("/medical-check2", authMiddleware, upload.single("image"), async (req, res) => {
+app.post("/medical-check", authMiddleware, upload.single("image"), async (req, res) => {
   try {
 
     if (!req.file) {
@@ -656,19 +660,32 @@ app.post("/medical-check2", authMiddleware, upload.single("image"), async (req, 
       medicalProfile: blindProfile
     });
 
+    console.log("[medical-check] AI advice received:", aiAdvice);
+
     // -----------------------------
-    // Final response
+    // Convert advice to audio
     // -----------------------------
-    return res.status(200).json({
-      message: "Medical check completed successfully",
-      product_name: productName,
-      medical_profile_used: {
-        allergies: blindProfile.allergies,
-        medicalConditions: blindProfile.medicalConditions,
-        dietaryPreferences: blindProfile.dietaryPreferences
-      },
-      ai_advice: aiAdvice
+    const ttsResult = await textToSpeech(aiAdvice);
+
+    if (!ttsResult.audio) {
+      return res.status(502).json({
+        message: "Text-to-speech conversion failed",
+        error: ttsResult.error
+      });
+    }
+
+    // -----------------------------
+    // Return audio response
+    // -----------------------------
+    res.set({
+      'Content-Type': 'audio/wav',
+      'Content-Disposition': 'inline; filename=medical_advice.wav',
+      'Content-Length': ttsResult.audio.length,
+      'X-Product-Name': encodeURIComponent(productName),
+      'X-User-Id': userId
     });
+
+    return res.send(ttsResult.audio);
 
   } catch (error) {
     console.error("Medical check error:", error);
@@ -680,8 +697,246 @@ app.post("/medical-check2", authMiddleware, upload.single("image"), async (req, 
 }
 );
 
+// Multer config for audio uploads
+const audioStorage = multer.memoryStorage();
+const audioUpload = multer({
+  storage: audioStorage,
+  fileFilter: (req, file, cb) => {
+    // Accept common audio formats
+    const allowedMimes = ['audio/wav', 'audio/mpeg', 'audio/mp3', 'audio/webm', 'audio/ogg', 'audio/flac', 'audio/m4a', 'audio/x-m4a'];
+    if (allowedMimes.includes(file.mimetype) || file.mimetype.startsWith('audio/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only audio files are allowed'), false);
+    }
+  }
+});
+
+app.post("/pi_intent", authMiddleware, audioUpload.single("audio"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: "No audio file uploaded", error: "Audio file is required" });
+    }
+
+    console.log("[pi_intent] Received audio file:", req.file.originalname, "Size:", req.file.size);
+
+    // 1) Speech-to-text
+    const sttResult = await speechToText(
+      req.file.buffer,
+      req.file.originalname || 'audio.wav',
+      req.file.mimetype || 'audio/wav'
+    );
+
+    if (!sttResult.text) {
+      return res.status(502).json({
+        message: "Speech-to-text failed",
+        error: sttResult.error
+      });
+    }
+
+    const transcribedText = sttResult.text;
+
+    // 2) Identify user intent module
+    const detectedModule = await identifyUserIntent(transcribedText);
+    console.log("[pi_intent] Detected module:", detectedModule);
+
+    // 3) Map module to action command for Pi
+    let actionCommand = "";
+    let requiresImage = false;
+
+    switch (detectedModule) {
+      case "Product Identification Module":
+        actionCommand = "CAPTURE_PRODUCT_IMAGE";
+        requiresImage = true;
+        break;
+      case "Medical Compatibility Module":
+        actionCommand = "CAPTURE_MEDICAL_IMAGE";
+        requiresImage = true;
+        break;
+      case "Currency Recognition Module":
+        actionCommand = "CAPTURE_CURRENCY_IMAGE";
+        requiresImage = true;
+        break;
+      case "Price Comparison Module":
+        actionCommand = "CAPTURE_PRICE_IMAGE";
+        requiresImage = true;
+        break;
+      case "Volunteer Video Call Module":
+        actionCommand = "INITIATE_VIDEO_CALL";
+        requiresImage = false;
+        break;
+      case "AI Assistance Module":
+      default:
+        actionCommand = "AI_CONVERSATION";
+        requiresImage = false;
+        break;
+    }
+
+    // 4) Special handling for AI_CONVERSATION - return audio instead of JSON
+    if (actionCommand === "AI_CONVERSATION") {
+      console.log("[pi_intent] AI conversation mode - generating response");
+
+      // Generate AI response using Gemini
+      const geminiPrompt = `You are a helpful AI assistant for a visually impaired user.
+The user asked: "${transcribedText}"
+
+Respond in a clear, concise, and conversational manner. Keep your response brief but helpful.
+Be friendly and supportive.`;
+
+      try {
+        const geminiResponse = await gemini.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents: geminiPrompt
+        });
+
+        const aiResponse = geminiResponse.text || "I'm here to help. Could you please repeat your question?";
+        console.log("[pi_intent] Gemini response:", aiResponse);
+
+        // Convert to audio
+        const ttsResult = await textToSpeech(aiResponse);
+
+        if (!ttsResult.audio) {
+          return res.status(502).json({
+            message: "Text-to-speech failed",
+            error: ttsResult.error
+          });
+        }
+
+        // Return audio with command in headers
+        res.set({
+          'Content-Type': 'audio/wav',
+          'Content-Disposition': 'inline; filename=ai_response.wav',
+          'Content-Length': ttsResult.audio.length,
+          'X-Action-Command': actionCommand,
+          'X-Detected-Module': detectedModule,
+          'X-Transcribed-Text': encodeURIComponent(transcribedText),
+          'X-Requires-Image': 'false'
+        });
+
+        return res.send(ttsResult.audio);
+
+      } catch (error) {
+        console.error("[pi_intent] AI conversation error:", error.message);
+        return res.status(500).json({
+          message: "AI conversation processing failed",
+          error: error.message
+        });
+      }
+    }
+
+    // 5) For other commands, return JSON as before
+    return res.status(200).json({
+      message: "Intent identified successfully",
+      transcribed_text: transcribedText,
+      detected_module: detectedModule,
+      action_command: actionCommand,
+      requires_image: requiresImage,
+      user_id: req.user.userId
+    });
+
+  } catch (error) {
+    console.error("[pi_intent] Error:", error.message);
+
+    if (error.code === 'ECONNREFUSED') {
+      return res.status(503).json({
+        message: "FastAPI service unavailable",
+        error: "Could not connect to speech-to-text service"
+      });
+    }
+
+    return res.status(500).json({
+      message: "Error processing audio",
+      error: error.message
+    });
+  }
+})
+
+app.post("/pi_audio", audioUpload.single("audio"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: "No audio file uploaded", error: "Audio file is required" });
+    }
+
+    console.log("[pi_audio] Received audio file:", req.file.originalname, "Size:", req.file.size);
+
+    // 1) Speech-to-text
+    const sttResult = await speechToText(
+      req.file.buffer,
+      req.file.originalname || 'audio.wav',
+      req.file.mimetype || 'audio/wav'
+    );
+
+    if (!sttResult.text) {
+      return res.status(502).json({
+        message: "Speech-to-text failed",
+        error: sttResult.error
+      });
+    }
+
+    const transcribedText = sttResult.text;
+
+    // 2) Identify user intent module
+    const detectedModule = await identifyUserIntent(transcribedText);
+    console.log("[pi_audio] Detected module:", detectedModule);
+
+    // 3) Generate appropriate response based on detected module
+    //     const geminiPrompt = `You are a helpful AI assistant for a visually impaired user.
+    // The user's intent has been identified as: ${detectedModule}
+
+    // Respond to the following user query in a clear, concise, and conversational manner.
+    // Keep your response brief but helpful. Acknowledge what they want to do and guide them appropriately.
+
+    // User said: "${transcribedText}"`;
+
+    //     const geminiResponse = await gemini.models.generateContent({
+    //       model: "gemini-2.5-flash",
+    //       contents: geminiPrompt
+    //     });
+
+    //     const aiResponse = geminiResponse.text || "";
+    //     console.log("[pi_audio] Gemini response:", aiResponse);
+
+    // 4) Text-to-speech
+    const ttsResult = await textToSpeech(detectedModule);
+
+    if (!ttsResult.audio) {
+      return res.status(502).json({
+        message: "Text-to-speech failed",
+        error: ttsResult.error
+      });
+    }
+
+    // 5) Return the audio WAV file with module info in headers
+    res.set({
+      'Content-Type': 'audio/wav',
+      'Content-Disposition': 'inline; filename=response.wav',
+      'Content-Length': ttsResult.audio.length,
+      'X-Detected-Module': detectedModule,
+      'X-Transcribed-Text': encodeURIComponent(transcribedText)
+    });
+
+    return res.send(ttsResult.audio);
+
+  } catch (error) {
+    console.error("[pi_audio] Error:", error.message);
+
+    if (error.code === 'ECONNREFUSED') {
+      return res.status(503).json({
+        message: "FastAPI service unavailable",
+        error: "Could not connect to speech-to-text/TTS service"
+      });
+    }
+
+    return res.status(500).json({
+      message: "Error processing audio",
+      error: error.message
+    });
+  }
+})
+
+
 
 const port = process.env.PORT || 4000;
 app.listen(port, () => {
-  console.log(`Zego token server running on port ${port}`);
+  console.log(`server running on port ${port}`);
 });

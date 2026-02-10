@@ -1,6 +1,6 @@
 import express from "express";
 import User from "../models/Users.model.js";
-import { generateToken04 } from "../zegoToken.js";
+import { AccessToken } from "livekit-server-sdk";
 import jwt from "jsonwebtoken";
 import VolunteerProfile from "../models/VolunteerProfile.model.js";
 
@@ -38,7 +38,7 @@ function generateRoomId(userId1, userId2) {
   return `call_${ids[0]}_${ids[1]}`;
 }
 
-// Get room + Zego token for a call
+// Get room + LiveKit token for a call
 router.post("/get-room", authenticateToken, async (req, res) => {
   try {
     const { targetUserId } = req.body;
@@ -51,18 +51,23 @@ router.post("/get-room", authenticateToken, async (req, res) => {
     // Generate deterministic room ID
     const roomID = generateRoomId(currentUserId, targetUserId);
 
-    // Get Zego token
-    const appID = Number(process.env.ZEGO_APP_ID);
-    const serverSecret = process.env.ZEGO_SERVER_SECRET;
-    const expire = Number(process.env.ZEGO_TOKEN_EXPIRES) || 3600;
+    // Generate LiveKit token
+    const apiKey = process.env.LIVEKIT_API_KEY;
+    const apiSecret = process.env.LIVEKIT_API_SECRET;
+    const livekitUrl = process.env.LIVEKIT_URL;
 
-    const token = generateToken04(appID, currentUserId, serverSecret, expire);
+    const at = new AccessToken(apiKey, apiSecret, {
+      identity: currentUserId,
+      ttl: "1h",
+    });
+    at.addGrant({ roomJoin: true, room: roomID, canPublish: true, canSubscribe: true });
+    const token = await at.toJwt();
 
     res.json({
       roomID,
-      appID,
       userID: currentUserId,
       token,
+      livekitUrl,
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -88,8 +93,8 @@ router.post("/initiate-call", authenticateToken, async (req, res) => {
       timestamp: Date.now(),
     });
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       roomID,
       message: "Call initiated"
     });
@@ -144,7 +149,7 @@ router.post("/request-volunteer", authenticateToken, async (req, res) => {
 router.get("/check-calls", authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
-    
+
     // Find calls where user is the callee
     const incomingCalls = [];
     for (const [roomID, call] of activeCalls.entries()) {
