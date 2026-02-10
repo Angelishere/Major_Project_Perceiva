@@ -65,11 +65,10 @@ except ImportError:
 # =============================================================================
 
 # Server Configuration
-SERVER_URL = os.environ.get("PERCEIVA_SERVER_URL", "http://192.168.85.134:4000")
+SERVER_URL = "https://major-project-perceiva.onrender.com"
 PI_INTENT_ENDPOINT = f"{SERVER_URL}/pi_intent"
 MEDICAL_CHECK_ENDPOINT = f"{SERVER_URL}/medical-check"
-AUTH_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2OTdhMWM2NzcyMGRhYTliYzBkYjMzZGQiLCJ1c2VybmFtZSI6ImFyanVuIiwicm9sZSI6ImJsaW5kIiwiaWF0IjoxNzcwNDY2MTM5LCJleHAiOjE3NzA0Njk3Mzl9.v9h6lOkW5VvWgsbLSPQMpC_QCGxWfYBbEMAby_OsjwE"  # JWT token for authentication
-
+AUTH_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2OTdhMWM2NzcyMGRhYTliYzBkYjMzZGQiLCJ1c2VybmFtZSI6ImFyanVuIiwicm9sZSI6ImJsaW5kIiwiaWF0IjoxNzcwNjE4MTM4LCJleHAiOjE3NzA2MjE3Mzh9.XFZ3nNoMvUR-OoIXTO5cIqGNVoAhrjeJscbnAmftjI8"
 # GPIO Configuration
 TOUCH_SENSOR_PIN = 17  # GPIO17 (Pin 11) - TTP223 OUT
 
@@ -425,6 +424,87 @@ def send_image_to_medical_check(image_path: str) -> bytes:
         return None
     except Exception as e:
         print(f"[MedicalCheck] Exception: {e}")
+        return None
+
+
+def send_image_to_currency_recognition(image_path: str) -> bytes:
+    """
+    Send captured image to currency recognition API and get TTS audio response.
+    
+    Args:
+        image_path: Path to the captured image
+    
+    Returns:
+        Audio bytes from TTS or None on failure
+    """
+    print(f"[CurrencyRecognition] Processing image: {image_path}")
+    
+    # API endpoints
+    CURRENCY_API = "https://chanel-confirmed-overprotectively.ngrok-free.dev/currency-recognition"
+    TTS_API = "https://chanel-confirmed-overprotectively.ngrok-free.dev/tts"
+    
+    try:
+        # Step 1: Send image to currency recognition
+        print("[CurrencyRecognition] Sending image to currency API...")
+        
+        with open(image_path, 'rb') as img_file:
+            files = {
+                'file': ('currency.jpg', img_file, 'image/jpeg')
+            }
+            
+            response = requests.post(
+                CURRENCY_API,
+                files=files,
+                timeout=30
+            )
+        
+        if response.status_code != 200:
+            print(f"[CurrencyRecognition] Currency API Error: HTTP {response.status_code}")
+            try:
+                print(f"[CurrencyRecognition] Error: {response.json()}")
+            except:
+                print(f"[CurrencyRecognition] Error: {response.text[:200]}")
+            return None
+        
+        # Parse currency prediction
+        result = response.json()
+        
+        if not result.get('ok'):
+            print("[CurrencyRecognition] Currency recognition failed")
+            return None
+        
+        prediction = result.get('prediction', 'unknown')
+        confidence = result.get('confidence', 0)
+        
+        print(f"[CurrencyRecognition] Detected currency: ₹{prediction}")
+        print(f"[CurrencyRecognition] Confidence: {confidence:.2%}")
+        
+        # Step 2: Generate TTS response
+        tts_text = f"This is a {prediction} rupee note."
+        print(f"[CurrencyRecognition] Generating TTS: {tts_text}")
+        
+        tts_response = requests.post(
+            TTS_API,
+            json={"text": tts_text},
+            timeout=30
+        )
+        
+        if tts_response.status_code != 200:
+            print(f"[CurrencyRecognition] TTS Error: HTTP {tts_response.status_code}")
+            return None
+        
+        print(f"[CurrencyRecognition] TTS audio received: {len(tts_response.content)} bytes")
+        
+        return tts_response.content
+        
+    except requests.exceptions.Timeout:
+        print("[CurrencyRecognition] Request timed out")
+        return None
+    except requests.exceptions.ConnectionError:
+        print("[CurrencyRecognition] Connection error - is the ngrok tunnel running?")
+        return None
+    except Exception as e:
+        print(f"[CurrencyRecognition] Exception: {e}")
         return None
 
 
@@ -920,6 +1000,27 @@ def process_single_interaction():
             
             if audio_response is None:
                 print("[Workflow] Medical check failed")
+                return False
+        
+        elif action_command == "CAPTURE_CURRENCY_IMAGE":
+            print("[Workflow] Currency recognition requested")
+            
+            # Create temp file for image
+            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_img:
+                image_path = tmp_img.name
+            
+            # Capture image
+            print("[Workflow] Capturing currency image...")
+            if not capture_image(image_path):
+                print("[Workflow] Image capture failed")
+                return False
+            
+            # Send image to currency recognition and get TTS audio
+            print("[Workflow] Sending image for currency recognition...")
+            audio_response = send_image_to_currency_recognition(image_path)
+            
+            if audio_response is None:
+                print("[Workflow] Currency recognition failed")
                 return False
         
         elif action_command == "INITIATE_VIDEO_CALL":
