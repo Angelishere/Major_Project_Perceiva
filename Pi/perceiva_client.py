@@ -66,9 +66,12 @@ except ImportError:
 
 # Server Configuration
 SERVER_URL = "https://major-project-perceiva.onrender.com"
+LOGIN_ENDPOINT = f"{SERVER_URL}/login"
 PI_INTENT_ENDPOINT = f"{SERVER_URL}/pi_intent"
 MEDICAL_CHECK_ENDPOINT = f"{SERVER_URL}/medical-check"
-AUTH_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2OTdhMWM2NzcyMGRhYTliYzBkYjMzZGQiLCJ1c2VybmFtZSI6ImFyanVuIiwicm9sZSI6ImJsaW5kIiwiaWF0IjoxNzcwNjE4MTM4LCJleHAiOjE3NzA2MjE3Mzh9.XFZ3nNoMvUR-OoIXTO5cIqGNVoAhrjeJscbnAmftjI8"
+FASTAPI_URL = "https://chanel-confirmed-overprotectively.ngrok-free.dev"  # FastAPI STT/TTS service
+AUTH_TOKEN = None  # Set at runtime via login
+
 # GPIO Configuration
 TOUCH_SENSOR_PIN = 17  # GPIO17 (Pin 11) - TTP223 OUT
 
@@ -218,106 +221,114 @@ def record_with_touch_trigger(output_path: str) -> bool:
 # Server Communication
 # =============================================================================
 
-def send_audio_to_server(audio_path: str) -> dict:
+def speech_to_text(audio_path: str) -> str:
     """
-    Send recorded audio to the Node.js server (/pi_intent) and receive intent command.
+    Send audio to FastAPI /stt-upload for speech-to-text conversion.
     
     Args:
         audio_path: Path to the recorded WAV file
     
     Returns:
-        Dict with intent information or audio data:
-        For commands requiring action:
-        {
-            'action_command': str,
-            'detected_module': str,
-            'transcribed_text': str,
-            'requires_image': bool
-        }
-        For AI conversation:
-        {
-            'action_command': 'AI_CONVERSATION',
-            'audio_response': bytes,
-            'detected_module': str,
-            'transcribed_text': str
-        }
-        Returns None on failure
+        Transcribed text string, or None on failure
     """
-    print(f"[Server] Sending audio to {PI_INTENT_ENDPOINT}")
-    
-    if not AUTH_TOKEN:
-        print("[Server] ERROR: No AUTH_TOKEN set. Please set PERCEIVA_AUTH_TOKEN environment variable.")
-        return None
+    stt_url = f"{FASTAPI_URL}/stt-upload"
+    print(f"[STT] Sending audio to {stt_url}")
     
     try:
         with open(audio_path, 'rb') as audio_file:
             files = {
-                'audio': ('recording.wav', audio_file, 'audio/wav')
-            }
-            
-            headers = {
-                'Authorization': f'Bearer {AUTH_TOKEN}'
+                'file': ('recording.wav', audio_file, 'audio/wav')
             }
             
             response = requests.post(
-                PI_INTENT_ENDPOINT,
+                stt_url,
                 files=files,
-                headers=headers,
-                timeout=120  # 2 minute timeout for processing
+                timeout=60
             )
         
         if response.status_code != 200:
-            print(f"[Server] Error: HTTP {response.status_code}")
-            try:
-                error_json = response.json()
-                print(f"[Server] Error details: {error_json}")
-            except:
-                print(f"[Server] Response: {response.text[:200]}")
+            print(f"[STT] Error: HTTP {response.status_code}")
+            print(f"[STT] Response: {response.text[:200]}")
             return None
         
-        # Check if response is audio (AI_CONVERSATION) or JSON (other commands)
-        content_type = response.headers.get('Content-Type', '')
+        result = response.json()
+        text = result.get('text', '').strip()
         
-        if 'audio' in content_type:
-            # Audio response - AI conversation
-            action_command = response.headers.get('X-Action-Command', 'AI_CONVERSATION')
-            detected_module = response.headers.get('X-Detected-Module', 'Unknown')
-            transcribed_text = requests.utils.unquote(
-                response.headers.get('X-Transcribed-Text', '')
-            )
-            
-            print(f"[Server] Success! (Audio Response)")
-            print(f"  - Action Command: {action_command}")
-            print(f"  - Detected Module: {detected_module}")
-            print(f"  - Transcribed: {transcribed_text}")
-            print(f"  - Audio size: {len(response.content)} bytes")
-            
-            return {
-                'action_command': action_command,
-                'audio_response': response.content,
-                'detected_module': detected_module,
-                'transcribed_text': transcribed_text
-            }
-        else:
-            # JSON response - command requiring action
-            intent_data = response.json()
-            
-            print(f"[Server] Success! (JSON Response)")
-            print(f"  - Action Command: {intent_data.get('action_command', 'Unknown')}")
-            print(f"  - Detected Module: {intent_data.get('detected_module', 'Unknown')}")
-            print(f"  - Transcribed: {intent_data.get('transcribed_text', '')}")
-            print(f"  - Requires Image: {intent_data.get('requires_image', False)}")
-            
-            return intent_data
+        if not text:
+            print("[STT] No text returned from STT")
+            return None
+        
+        print(f"[STT] Transcribed: {text}")
+        return text
         
     except requests.exceptions.Timeout:
-        print("[Server] Request timed out")
+        print("[STT] Request timed out")
         return None
     except requests.exceptions.ConnectionError:
-        print(f"[Server] Connection error - is the server running at {SERVER_URL}?")
+        print(f"[STT] Connection error - is FastAPI running at {FASTAPI_URL}?")
         return None
     except Exception as e:
-        print(f"[Server] Exception: {e}")
+        print(f"[STT] Exception: {e}")
+        return None
+
+
+def send_text_to_intent(text: str) -> dict:
+    """
+    Send transcribed text to Node.js /pi_intent endpoint to get intent command.
+    
+    Args:
+        text: Transcribed text from STT
+    
+    Returns:
+        Dict with intent info or audio data, or None on failure
+    """
+    print(f"[Intent] Sending text to {PI_INTENT_ENDPOINT}")
+    
+    if not AUTH_TOKEN:
+        print("[Intent] ERROR: No AUTH_TOKEN set.")
+        return None
+    
+    try:
+        headers = {
+            'Authorization': f'Bearer {AUTH_TOKEN}',
+            'Content-Type': 'application/json'
+        }
+        
+        response = requests.post(
+            PI_INTENT_ENDPOINT,
+            json={'text': text},
+            headers=headers,
+            timeout=120
+        )
+        
+        if response.status_code != 200:
+            print(f"[Intent] Error: HTTP {response.status_code}")
+            try:
+                error_json = response.json()
+                print(f"[Intent] Error details: {error_json}")
+            except:
+                print(f"[Intent] Response: {response.text[:200]}")
+            return None
+        
+        # Parse JSON response
+        intent_data = response.json()
+        
+        print(f"[Intent] Success!")
+        print(f"  - Action Command: {intent_data.get('action_command', 'Unknown')}")
+        print(f"  - Detected Module: {intent_data.get('detected_module', 'Unknown')}")
+        if intent_data.get('ai_response'):
+            print(f"  - AI Response: {intent_data['ai_response'][:100]}...")
+        
+        return intent_data
+        
+    except requests.exceptions.Timeout:
+        print("[Intent] Request timed out")
+        return None
+    except requests.exceptions.ConnectionError:
+        print(f"[Intent] Connection error - is the server running at {SERVER_URL}?")
+        return None
+    except Exception as e:
+        print(f"[Intent] Exception: {e}")
         return None
 
 
@@ -365,7 +376,8 @@ def capture_image(output_path: str) -> bool:
 
 def send_image_to_medical_check(image_path: str) -> bytes:
     """
-    Send image to /medical-check endpoint and receive audio advice.
+    Send image to /medical-check endpoint and receive advice as text,
+    then convert to audio via FastAPI TTS.
     
     Args:
         image_path: Path to the image file
@@ -405,16 +417,35 @@ def send_image_to_medical_check(image_path: str) -> bytes:
                 print(f"[MedicalCheck] Response: {response.text[:200]}")
             return None
         
-        # Extract product info from headers
-        product_name = requests.utils.unquote(
-            response.headers.get('X-Product-Name', 'Unknown')
-        )
+        # Parse JSON response
+        result = response.json()
+        product_name = result.get('product_name', 'Unknown')
+        advice = result.get('advice', '')
         
         print(f"[MedicalCheck] Success!")
         print(f"  - Product Name: {product_name}")
-        print(f"  - Audio size: {len(response.content)} bytes")
+        print(f"  - Advice: {advice[:100]}...")
         
-        return response.content
+        if not advice:
+            print("[MedicalCheck] No advice received")
+            return None
+        
+        # Convert advice to audio via FastAPI TTS
+        TTS_API = f"{FASTAPI_URL}/tts"
+        print("[MedicalCheck] Converting advice to audio...")
+        
+        tts_response = requests.post(
+            TTS_API,
+            json={"text": advice},
+            timeout=30
+        )
+        
+        if tts_response.status_code != 200:
+            print(f"[MedicalCheck] TTS failed: HTTP {tts_response.status_code}")
+            return None
+        
+        print(f"[MedicalCheck] TTS audio received: {len(tts_response.content)} bytes")
+        return tts_response.content
         
     except requests.exceptions.Timeout:
         print("[MedicalCheck] Request timed out")
@@ -969,11 +1000,18 @@ def process_single_interaction():
             print("[Workflow] Recording too short, ignoring")
             return False
         
-        # Step 2: Send audio to /pi_intent
-        intent_data = send_audio_to_server(recording_path)
+        # Step 2: Speech-to-text via FastAPI
+        transcribed_text = speech_to_text(recording_path)
+        
+        if transcribed_text is None:
+            print("[Workflow] Speech-to-text failed")
+            return False
+        
+        # Step 3: Send text to /pi_intent for intent detection
+        intent_data = send_text_to_intent(transcribed_text)
         
         if intent_data is None:
-            print("[Workflow] Server communication failed")
+            print("[Workflow] Intent detection failed")
             return False
         
         action_command = intent_data.get('action_command', '')
@@ -1044,24 +1082,36 @@ def process_single_interaction():
         elif action_command == "AI_CONVERSATION":
             print("[Workflow] AI conversation detected")
             
-            # Audio response is already in the intent_data
-            audio_response = intent_data.get('audio_response')
+            # Get AI response text from server
+            ai_response_text = intent_data.get('ai_response')
             
-            if audio_response is None:
-                print("[Workflow] No audio response received")
+            if not ai_response_text:
+                print("[Workflow] No AI response text received")
                 return False
             
-            # Play the AI response audio
-            print("[Workflow] Playing AI response...")
-            success = play_audio_pulseaudio(audio_response)
+            print(f"[Workflow] AI response: {ai_response_text}")
             
-            if not success:
-                print("[Workflow] Audio playback failed")
+            # Convert to audio via FastAPI TTS
+            TTS_API = f"{FASTAPI_URL}/tts"
+            print("[Workflow] Converting AI response to audio...")
+            
+            try:
+                tts_response = requests.post(
+                    TTS_API,
+                    json={"text": ai_response_text},
+                    timeout=30
+                )
+                
+                if tts_response.status_code != 200:
+                    print(f"[Workflow] TTS failed: HTTP {tts_response.status_code}")
+                    return False
+                
+                audio_response = tts_response.content
+                print(f"[Workflow] TTS audio received: {len(audio_response)} bytes")
+                
+            except Exception as e:
+                print(f"[Workflow] TTS error: {e}")
                 return False
-            
-            # Return to normal mode
-            print("[Workflow] AI conversation complete")
-            return True
         
         else:
             # For other commands, we would handle them here
@@ -1094,6 +1144,49 @@ def process_single_interaction():
                 pass
 
 
+def login():
+    """Prompt for credentials and authenticate with the server."""
+    global AUTH_TOKEN
+    
+    print("\n[Login] Please enter your credentials")
+    username = input("  Username: ").strip()
+    password = input("  Password: ").strip()
+    
+    if not username or not password:
+        print("[Login] Username and password are required")
+        return False
+    
+    try:
+        print(f"[Login] Authenticating as '{username}'...")
+        response = requests.post(
+            LOGIN_ENDPOINT,
+            json={"username": username, "password": password},
+            timeout=15
+        )
+        
+        if response.status_code != 200:
+            print(f"[Login] Failed: HTTP {response.status_code}")
+            try:
+                print(f"[Login] {response.json().get('message', '')}")
+            except:
+                pass
+            return False
+        
+        data = response.json()
+        AUTH_TOKEN = data.get('token')
+        user = data.get('user', {})
+        
+        print(f"[Login] ✅ Logged in as {user.get('username', username)} ({user.get('role', 'unknown')})")
+        return True
+        
+    except requests.exceptions.ConnectionError:
+        print(f"[Login] Connection error - is the server running at {SERVER_URL}?")
+        return False
+    except Exception as e:
+        print(f"[Login] Error: {e}")
+        return False
+
+
 def main():
     """Main entry point - runs the touch-triggered loop."""
     print("=" * 60)
@@ -1103,6 +1196,11 @@ def main():
     print(f"Audio Device: {AUDIO_DEVICE}")
     print(f"Touch Sensor: GPIO{TOUCH_SENSOR_PIN}")
     print("-" * 60)
+    
+    # Login
+    if not login():
+        print("[Main] Login failed. Exiting.")
+        return
     
     # Setup
     setup_gpio()
