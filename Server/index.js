@@ -73,16 +73,34 @@ const upload = multer(
   }
 )
 
+/**
+ * Flatten SerpAPI google_ai_mode text_blocks into plain readable text.
+ * Handles paragraph, heading, and list block types.
+ */
+function flattenSerpBlocks(serpData) {
+  if (!Array.isArray(serpData)) return "";
+
+  const lines = [];
+  for (const block of serpData) {
+    if (block.type === "paragraph" || block.type === "heading") {
+      if (block.snippet) lines.push(block.snippet);
+    } else if (block.type === "list" && Array.isArray(block.list)) {
+      for (const item of block.list) {
+        if (typeof item === "string") lines.push(item);
+        else if (item && item.snippet) lines.push(item.snippet);
+      }
+    }
+  }
+  return lines.filter(Boolean).join("\n");
+}
+
 async function extractIngredientsWithGemini(serpData) {
   if (!Array.isArray(serpData) || serpData.length === 0) {
     return { ingredients: [], allergens: [], warnings: [] };
   }
 
-  // 1) Convert SERP objects into readable text
-  const searchText = serpData
-    .map(item => item.snippet)
-    .filter(Boolean)
-    .join("\n\n");
+  // Convert SERP blocks into readable text
+  const searchText = flattenSerpBlocks(serpData);
 
   const prompt = `
 Extract ingredients and common allergens from the text below.
@@ -136,11 +154,8 @@ async function getConsumabilityAdviceWithGemini({
     return "Insufficient ingredient information available for this product. Please consult a healthcare professional before consuming.";
   }
 
-  // Convert SERP objects into readable text
-  const searchText = serpData
-    .map(item => item.snippet)
-    .filter(Boolean)
-    .join("\n\n");
+  // Convert SERP blocks into readable text
+  const searchText = flattenSerpBlocks(serpData);
 
   const prompt = `
 You are a medical nutritionist giving brief spoken advice to a visually impaired patient.

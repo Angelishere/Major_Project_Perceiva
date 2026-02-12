@@ -9,7 +9,7 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
   const [logs, setLogs] = useState([]);
   const [myUserID, setMyUserID] = useState(null);
 
-  const localVideoRef = useRef(null);
+
   const remoteVideoRef = useRef(null);
   const roomRef = useRef(null);
 
@@ -67,17 +67,10 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
       await newRoom.connect(livekitUrl, token);
       log("Connected to room: " + roomID);
 
-      // Enable camera and microphone
-      await newRoom.localParticipant.enableCameraAndMicrophone();
-      log("Camera and microphone enabled");
+      // Enable microphone only (volunteer doesn't need camera)
+      await newRoom.localParticipant.setMicrophoneEnabled(true);
+      log("Microphone enabled");
       setPublishing(true);
-
-      // Attach local video
-      const localVideoTrack = newRoom.localParticipant.getTrackPublication(Track.Source.Camera);
-      if (localVideoTrack?.track && localVideoRef.current) {
-        localVideoTrack.track.attach(localVideoRef.current);
-        log("✅ Local video attached");
-      }
 
       // Check for existing remote participants
       newRoom.remoteParticipants.forEach((participant) => {
@@ -204,59 +197,40 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
   }
 
   return (
-    <div style={{ padding: 20, maxWidth: 1000, margin: "0 auto" }}>
+    <div style={{ padding: 20, maxWidth: 800, margin: "0 auto" }}>
       <h2>Call with {targetUser?.username}</h2>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
-        {/* Local Video */}
-        <div>
-          <h4>You {myUserID && `(${myUserID.slice(0, 8)}...)`}</h4>
-          <video
-            ref={localVideoRef}
-            autoPlay
-            playsInline
-            muted
+      {/* Remote Video (rotated 90° for Pi camera orientation) */}
+      <div style={{ position: "relative", marginBottom: 20, display: "flex", justifyContent: "center", overflow: "hidden", borderRadius: 8, background: "#000" }}>
+        <video
+          ref={remoteVideoRef}
+          autoPlay
+          playsInline
+          style={{
+            width: "100%",
+            maxHeight: 500,
+            objectFit: "contain",
+            transform: "rotate(180deg)",
+            background: "#000",
+          }}
+        />
+        {!remoteParticipant && (
+          <div
             style={{
-              width: "100%",
-              height: 300,
-              background: "#000",
+              position: "absolute",
+              top: "50%",
+              left: "50%",
+              transform: "translate(-50%, -50%)",
+              color: "white",
+              fontSize: 14,
+              background: "rgba(0,0,0,0.7)",
+              padding: "10px 20px",
               borderRadius: 8,
             }}
-          />
-        </div>
-
-        {/* Remote Video */}
-        <div style={{ position: "relative" }}>
-          <h4>{targetUser?.username}</h4>
-          <video
-            ref={remoteVideoRef}
-            autoPlay
-            playsInline
-            style={{
-              width: "100%",
-              height: 300,
-              background: "#000",
-              borderRadius: 8,
-            }}
-          />
-          {!remoteParticipant && (
-            <div
-              style={{
-                position: "absolute",
-                top: "50%",
-                left: "50%",
-                transform: "translate(-50%, -50%)",
-                color: "white",
-                fontSize: 14,
-                background: "rgba(0,0,0,0.7)",
-                padding: "10px 20px",
-                borderRadius: 8,
-              }}
-            >
-              Waiting for {targetUser?.username} to join...
-            </div>
-          )}
-        </div>
+          >
+            Waiting for {targetUser?.username} to join...
+          </div>
+        )}
       </div>
 
       <div style={{ textAlign: "center" }}>
