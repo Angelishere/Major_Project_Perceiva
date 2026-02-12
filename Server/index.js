@@ -143,37 +143,26 @@ async function getConsumabilityAdviceWithGemini({
     .join("\n\n");
 
   const prompt = `
-You are a qualified medical nutritionist advising a visually impaired patient.
+You are a medical nutritionist giving brief spoken advice to a visually impaired patient.
 
-Patient medical history:
-- Allergies: ${medicalProfile.allergies.length ? medicalProfile.allergies.join(", ") : "none"}
-- Medical conditions: ${medicalProfile.medicalConditions.length ? medicalProfile.medicalConditions.join(", ") : "none"}
-- Dietary preferences: ${medicalProfile.dietaryPreferences.length ? medicalProfile.dietaryPreferences.join(", ") : "none"}
+Patient: Allergies: ${medicalProfile.allergies.length ? medicalProfile.allergies.join(", ") : "none"} | Conditions: ${medicalProfile.medicalConditions.length ? medicalProfile.medicalConditions.join(", ") : "none"} | Diet: ${medicalProfile.dietaryPreferences.length ? medicalProfile.dietaryPreferences.join(", ") : "none"}
 
-Product under consideration:
-${productName}
+Product: ${productName}
 
-Ingredient-related information from reliable sources (verbatim, unfiltered):
+Source info:
 ${searchText}
 
-Your task:
-Carefully assess whether this product is appropriate for the patient.
+Rules:
+- Use ONLY the info above. Do not invent ingredients.
+- Be medically conservative. If any risk exists, advise against it.
+- If info is insufficient, say so.
 
-Guidelines:
-- Base your advice ONLY on the information provided above.
-- Do NOT assume or invent ingredients.
-- Be medically conservative.
-- If there is any meaningful risk, advise against consumption.
-- If information is insufficient, clearly say so.
-
-Response style:
-- Write as a doctor or clinical nutritionist speaking directly to the patient.
-- Use clear, calm, and supportive language.
-- Avoid technical jargon.
-- Do NOT mention probabilities, percentages, or internal reasoning.
-- Do NOT output JSON, bullet points, headings, or labels.
-
-Return ONLY the medical advice.
+CRITICAL FORMAT RULES:
+- Reply in EXACTLY 2-3 short sentences, maximum 40 words total.
+- Start directly with the verdict: "Safe to consume." or "Avoid this product." or "Not enough information."
+- Then give ONE brief reason.
+- No greetings, no elaboration, no bullet points, no JSON.
+- Output must be plain spoken English suitable for text-to-speech. No symbols, no asterisks, no markdown, no special characters, no newlines.
 `;
 
 
@@ -185,8 +174,13 @@ Return ONLY the medical advice.
 
     const rawText = response.text || "";
 
-    // Return the plain text advice directly
-    return rawText.trim();
+    // Sanitize for TTS: strip newlines, markdown symbols, and extra whitespace
+    const ttsClean = rawText
+      .replace(/[\r\n]+/g, " ")       // newlines to spaces
+      .replace(/[*#_~`>|\-•]+/g, "") // strip markdown/bullet symbols
+      .replace(/\s{2,}/g, " ")        // collapse multiple spaces
+      .trim();
+    return ttsClean;
 
   } catch (err) {
     console.error("❌ Gemini consumability error:", err.message);
