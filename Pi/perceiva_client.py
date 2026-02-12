@@ -65,10 +65,11 @@ except ImportError:
 # =============================================================================
 
 # Server Configuration
-SERVER_URL = "https://major-project-perceiva.onrender.com"
+SERVER_URL = "http://192.168.53.134:4000"
 LOGIN_ENDPOINT = f"{SERVER_URL}/login"
 PI_INTENT_ENDPOINT = f"{SERVER_URL}/pi_intent"
 MEDICAL_CHECK_ENDPOINT = f"{SERVER_URL}/medical-check"
+PRODUCT_IDENTIFICATION_ENDPOINT = f"{SERVER_URL}/identify-product"
 FASTAPI_URL = "https://chanel-confirmed-overprotectively.ngrok-free.dev"  # FastAPI STT/TTS service
 AUTH_TOKEN = None  # Set at runtime via login
 
@@ -98,6 +99,26 @@ VIDEO_FPS = 24
 LIVEKIT_AUDIO_RATE = 16000
 LIVEKIT_AUDIO_CHANNELS = 2
 LIVEKIT_AUDIO_CHUNK = 320  # 20ms @ 16kHz
+
+# Audio Files (assumed to be in same directory)
+AUDIO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wav")
+
+def play_audio_file(filename: str):
+    """Play a local audio file using paplay (PulseAudio) or aplay (ALSA)"""
+    filepath = os.path.join(AUDIO_DIR, filename)
+    if not os.path.exists(filepath):
+        print(f"[Audio] File not found: {filepath}")
+        return
+
+    # Use specified PLAYBACK_COMMAND (paplay) or fallback to aplay if simple ALSA needed
+    cmd = [PLAYBACK_COMMAND, filepath]
+    
+    try:
+        # Run in background or foreground? For short cues, foreground is usually better to ensure sequence
+        # But for 'Calling...' loop it might need to be async. For now, simple blocking playback for cues.
+        subprocess.run(cmd, check=False, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+    except Exception as e:
+        print(f"[Audio] Error playing {filename}: {e}")
 
 # =============================================================================
 # Audio Recording Functions
@@ -170,6 +191,7 @@ def record_with_touch_trigger(output_path: str) -> bool:
         
         start_time = time.time()
         touch_released_time = None
+        touch_start_played = False
         
         while True:
             elapsed = time.time() - start_time
@@ -187,8 +209,14 @@ def record_with_touch_trigger(output_path: str) -> bool:
                 touch_active = elapsed < 3.0
             
             if touch_active:
+                if not touch_start_played:
+                    play_audio_file("touch.wav")
+                    touch_start_played = True
+                
                 touch_released_time = None
             else:
+                touch_start_played = False # Reset for next touch
+                
                 if touch_released_time is None:
                     touch_released_time = time.time()
                 elif time.time() - touch_released_time >= SILENCE_THRESHOLD:
@@ -350,8 +378,11 @@ def capture_image(output_path: str) -> bool:
         print("[Camera] Initializing camera...")
         picam = Picamera2()
         
-        # Configure for still image capture
-        config = picam.create_still_configuration()
+        # Configure for still image capture at reduced resolution
+        # 1024x768 is sufficient for product label identification and keeps upload fast
+        config = picam.create_still_configuration(
+            main={"size": (1024, 768)}
+        )
         picam.configure(config)
         
         print("[Camera] Starting camera...")
@@ -360,14 +391,16 @@ def capture_image(output_path: str) -> bool:
         # Allow camera to warm up
         time.sleep(2)
         
+        play_audio_file("shutter.wav")
         print(f"[Camera] Capturing image to {output_path}...")
         picam.capture_file(output_path)
         
         picam.stop()
         picam.close()
         
-        print("[Camera] Image captured successfully")
-        return os.path.exists(output_path) and os.path.getsize(output_path) > 0
+        file_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+        print(f"[Camera] Image captured successfully ({file_size / 1024:.0f} KB)")
+        return file_size > 0
         
     except Exception as e:
         print(f"[Camera] Exception: {e}")
@@ -378,84 +411,112 @@ def send_image_to_medical_check(image_path: str) -> bytes:
     """
     Send image to /medical-check endpoint and receive advice as text,
     then convert to audio via FastAPI TTS.
-    
+
     Args:
         image_path: Path to the image file
-    
+
     Returns:
         Audio bytes (WAV) or None on failure
     """
-    print(f"[MedicalCheck] Sending image to {MEDICAL_CHECK_ENDPOINT}")
-    
     if not AUTH_TOKEN:
         print("[MedicalCheck] ERROR: No AUTH_TOKEN set")
         return None
-    
+
+    # Debug file size
     try:
-        with open(image_path, 'rb') as image_file:
-            files = {
-                'image': ('product.jpg', image_file, 'image/jpeg')
-            }
-            
-            headers = {
-                'Authorization': f'Bearer {AUTH_TOKEN}'
-            }
-            
-            response = requests.post(
-                MEDICAL_CHECK_ENDPOINT,
-                files=files,
-                headers=headers,
-                timeout=120  # 2 minute timeout
+        file_size = os.path.getsize(image_path)
+        print(f"[MedicalCheck] Image size: {file_size / 1024:.0f} KB")
+    except:
+        pass
+
+    headers = {
+        "Authorization": f"Bearer {AUTH_TOKEN}"
+    }
+
+    MAX_RETRIES = 2
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            print(f"[MedicalCheck] Sending to {MEDICAL_CHECK_ENDPOINT} (attempt {attempt}/{MAX_RETRIES})")
+
+            # STREAM FILE like currency recognition endpoint
+            with open(image_path, "rb") as img_file:
+
+                files = {
+                    "image": ("product.jpg", img_file, "image/jpeg")
+                }
+
+                response = requests.post(
+                    MEDICAL_CHECK_ENDPOINT,
+                    files=files,
+                    headers=headers,
+                    timeout=(20, 180)  # longer connect timeout for Pi
+                )
+
+            # Retry only on 502
+            if response.status_code == 502 and attempt < MAX_RETRIES:
+                print("[MedicalCheck] Got 502, retrying in 3s...")
+                time.sleep(3)
+                continue
+
+            if response.status_code != 200:
+                print(f"[MedicalCheck] Error: HTTP {response.status_code}")
+                try:
+                    print(f"[MedicalCheck] Error details: {response.json()}")
+                except:
+                    print(f"[MedicalCheck] Response: {response.text[:200]}")
+                return None
+
+            # Parse response JSON
+            result = response.json()
+            product_name = result.get("product_name", "Unknown")
+            advice = result.get("advice", "")
+
+            print("[MedicalCheck] Success!")
+            print(f"  - Product Name: {product_name}")
+            print(f"  - Advice: {advice[:100]}...")
+
+            if not advice:
+                print("[MedicalCheck] No advice received")
+                return None
+
+            # Convert advice to audio
+            TTS_API = f"{FASTAPI_URL}/tts"
+            print("[MedicalCheck] Converting advice to audio...")
+
+            tts_response = requests.post(
+                TTS_API,
+                json={"text": advice},
+                timeout=30
             )
-        
-        if response.status_code != 200:
-            print(f"[MedicalCheck] Error: HTTP {response.status_code}")
-            try:
-                error_json = response.json()
-                print(f"[MedicalCheck] Error details: {error_json}")
-            except:
-                print(f"[MedicalCheck] Response: {response.text[:200]}")
+
+            if tts_response.status_code != 200:
+                print(f"[MedicalCheck] TTS failed: HTTP {tts_response.status_code}")
+                return None
+
+            print(f"[MedicalCheck] TTS audio received: {len(tts_response.content)} bytes")
+            return tts_response.content
+
+        except requests.exceptions.Timeout:
+            print(f"[MedicalCheck] Timeout on attempt {attempt}")
+            if attempt < MAX_RETRIES:
+                time.sleep(3)
+                continue
             return None
-        
-        # Parse JSON response
-        result = response.json()
-        product_name = result.get('product_name', 'Unknown')
-        advice = result.get('advice', '')
-        
-        print(f"[MedicalCheck] Success!")
-        print(f"  - Product Name: {product_name}")
-        print(f"  - Advice: {advice[:100]}...")
-        
-        if not advice:
-            print("[MedicalCheck] No advice received")
+
+        except requests.exceptions.ConnectionError as e:
+            print(f"[MedicalCheck] Connection error on attempt {attempt}: {e}")
+            if attempt < MAX_RETRIES:
+                time.sleep(3)
+                continue
             return None
-        
-        # Convert advice to audio via FastAPI TTS
-        TTS_API = f"{FASTAPI_URL}/tts"
-        print("[MedicalCheck] Converting advice to audio...")
-        
-        tts_response = requests.post(
-            TTS_API,
-            json={"text": advice},
-            timeout=30
-        )
-        
-        if tts_response.status_code != 200:
-            print(f"[MedicalCheck] TTS failed: HTTP {tts_response.status_code}")
+
+        except Exception as e:
+            print(f"[MedicalCheck] Exception: {e}")
             return None
-        
-        print(f"[MedicalCheck] TTS audio received: {len(tts_response.content)} bytes")
-        return tts_response.content
-        
-    except requests.exceptions.Timeout:
-        print("[MedicalCheck] Request timed out")
-        return None
-    except requests.exceptions.ConnectionError:
-        print(f"[MedicalCheck] Connection error - is the server running?")
-        return None
-    except Exception as e:
-        print(f"[MedicalCheck] Exception: {e}")
-        return None
+
+    return None
+
 
 
 def send_image_to_currency_recognition(image_path: str) -> bytes:
@@ -510,37 +571,156 @@ def send_image_to_currency_recognition(image_path: str) -> bytes:
         print(f"[CurrencyRecognition] Detected currency: ₹{prediction}")
         print(f"[CurrencyRecognition] Confidence: {confidence:.2%}")
         
-        # Step 2: Generate TTS response
-        tts_text = f"This is a {prediction} rupee note."
-        print(f"[CurrencyRecognition] Generating TTS: {tts_text}")
+        print(f"[CurrencyRecognition] Detected currency: ₹{prediction}")
+        print(f"[CurrencyRecognition] Confidence: {confidence:.2%}")
         
-        tts_response = requests.post(
-            TTS_API,
-            json={"text": tts_text},
-            timeout=30
-        )
+        # Step 2: Play local audio file for currency
+        # Expected files: "10.wav", "20.wav", "50.wav", "100.wav", "200.wav", "500.wav"
+        currency_audio_file = f"{prediction}.wav"
         
-        if tts_response.status_code != 200:
-            print(f"[CurrencyRecognition] TTS Error: HTTP {tts_response.status_code}")
-            return None
+        print(f"[CurrencyRecognition] Playing local audio: {currency_audio_file}")
+        play_audio_file(currency_audio_file)
         
-        print(f"[CurrencyRecognition] TTS audio received: {len(tts_response.content)} bytes")
-        
-        return tts_response.content
+        # Return dummy bytes to signal success (since we handled playback locally)
+        return b"LOCAL_PLAYBACK_DONE"
         
     except requests.exceptions.Timeout:
         print("[CurrencyRecognition] Request timed out")
+        play_audio_file("Interaction_fail.wav")
         return None
     except requests.exceptions.ConnectionError:
         print("[CurrencyRecognition] Connection error - is the ngrok tunnel running?")
+        play_audio_file("Interaction_fail.wav")
+        return None
+    except Exception as e:
+        print(f"[CurrencyRecognition] Exception: {e}")
+        play_audio_file("Interaction_fail.wav")
         return None
     except Exception as e:
         print(f"[CurrencyRecognition] Exception: {e}")
         return None
 
 
+def send_image_to_find_product(image_path: str, query_text: str) -> bytes:
+    """
+    Send image and query to /find-product and get TTS audio response.
+    """
+    if not AUTH_TOKEN:
+        print("[FindProduct] ERROR: No AUTH_TOKEN set")
+        return None
+        
+    endpoint = f"{SERVER_URL}/find-product"
+    print(f"[FindProduct] Sending to {endpoint} with query: '{query_text}'")
+    
+    try:
+        with open(image_path, 'rb') as img_file:
+            files = {'image': ('scene.jpg', img_file, 'image/jpeg')}
+            data = {'query': query_text}
+            headers = {'Authorization': f'Bearer {AUTH_TOKEN}'}
+            
+            response = requests.post(endpoint, files=files, data=data, headers=headers, timeout=60)
+            
+        if response.status_code != 200:
+            print(f"[FindProduct] Error: HTTP {response.status_code}")
+            return None
+            
+        result = response.json()
+        guidance = result.get('guidance', '')
+        print(f"[FindProduct] Guidance: {guidance}")
+        
+        # If guidance is empty, maybe play a generic fail message?
+        if not guidance:
+            print("[FindProduct] No guidance returned")
+            return None
+            
+        # TTS
+        tts_url = f"{FASTAPI_URL}/tts"
+        tts_resp = requests.post(tts_url, json={'text': guidance}, timeout=30)
+        
+        if tts_resp.status_code != 200:
+            print(f"[FindProduct] TTS failed: {tts_resp.status_code}")
+            return None
+            
+        return tts_resp.content
+        
+    except Exception as e:
+        print(f"[FindProduct] Exception: {e}")
+        return None
+
+
+def send_image_to_product_identification(image_path: str) -> bytes:
+    """
+    Send image to /identify-product endpoint and receive product name as text,
+    then convert to audio via FastAPI TTS.
+
+    Args:
+        image_path: Path to the image file
+
+    Returns:
+        Audio bytes (WAV) or None on failure
+    """
+    if not AUTH_TOKEN:
+        print("[ProductID] ERROR: No AUTH_TOKEN set")
+        return None
+
+    print(f"[ProductID] Processing image: {image_path}")
+
+    try:
+        with open(image_path, "rb") as img_file:
+            files = {
+                "image": ("product.jpg", img_file, "image/jpeg")
+            }
+            
+            print("[ProductID] Sending to server...")
+            response = requests.post(
+                PRODUCT_IDENTIFICATION_ENDPOINT,
+                files=files,
+                timeout=30
+            )
+
+            if response.status_code != 200:
+                print(f"[ProductID] Error: HTTP {response.status_code}")
+                try:
+                    print(f"[ProductID] Error details: {response.json()}")
+                except:
+                    print(f"[ProductID] Response: {response.text[:200]}")
+                return None
+
+            # Parse response JSON
+            result = response.json()
+            product_name = result.get("product_name", "")
+            
+            print("[ProductID] Success!")
+            print(f"  - Product Name: {product_name}")
+
+            if not product_name:
+                print("[ProductID] No product name received")
+                return None
+
+            # Convert to audio
+            TTS_API = f"{FASTAPI_URL}/tts"
+            print("[ProductID] Converting result to audio...")
+
+            tts_response = requests.post(
+                TTS_API,
+                json={"text": product_name},
+                timeout=30
+            )
+
+            if tts_response.status_code != 200:
+                print(f"[ProductID] TTS failed: HTTP {tts_response.status_code}")
+                return None
+
+            print(f"[ProductID] TTS audio received: {len(tts_response.content)} bytes")
+            return tts_response.content
+
+    except Exception as e:
+        print(f"[ProductID] Exception: {e}")
+        return None
+
+
 # =============================================================================
-# LiveKit Video Call Functions
+# Video Call Functions
 # =============================================================================
 
 # Global audio player for remote audio
@@ -654,6 +834,8 @@ async def initiate_video_call():
     try:
         # ===== Request volunteer =====
         print("[VideoCall] Requesting volunteer...")
+        play_audio_file("Calling.wav")
+        
         resp = requests.post(
             f"{BACKEND_URL}/api/call/request-volunteer",
             headers=headers,
@@ -663,6 +845,7 @@ async def initiate_video_call():
         
         if not data.get("success"):
             print("❌ [VideoCall] No volunteers available")
+            play_audio_file("Interaction_fail.wav")
             return False
         
         room_id = data["roomID"]
@@ -701,6 +884,7 @@ async def initiate_video_call():
         print("🔗 [VideoCall] Connecting to LiveKit...")
         await room.connect(livekit_url, token)
         print("✅ [VideoCall] Connected")
+        play_audio_file("Call_accepted.wav")
         
         # Start Bluetooth audio player
         start_bluetooth_player()
@@ -797,6 +981,8 @@ async def initiate_video_call():
             except:
                 audio_player.kill()
             audio_player = None
+            
+        play_audio_file("Call_Ended.wav")
         
         # End call on backend
         if room_id:
@@ -1019,7 +1205,28 @@ def process_single_interaction():
         # Step 3: Handle command-specific actions
         audio_response = None
         
-        if action_command == "CAPTURE_MEDICAL_IMAGE":
+        if action_command == "CAPTURE_PRODUCT_IMAGE":
+            print("[Workflow] Product identification requested")
+            
+            # Create temp file for image
+            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_img:
+                image_path = tmp_img.name
+            
+            # Capture image
+            print("[Workflow] Capturing product image...")
+            if not capture_image(image_path):
+                print("[Workflow] Image capture failed")
+                return False
+            
+            # Send image to identify-product endpoint
+            print("[Workflow] Sending image for identification...")
+            audio_response = send_image_to_product_identification(image_path)
+            
+            if audio_response is None:
+                print("[Workflow] Product identification failed")
+                return False
+
+        elif action_command == "CAPTURE_MEDICAL_IMAGE":
             print("[Workflow] Medical compatibility check requested")
             
             # Create temp file for image
@@ -1061,6 +1268,28 @@ def process_single_interaction():
                 print("[Workflow] Currency recognition failed")
                 return False
         
+        elif action_command == "CAPTURE_SHELF_IMAGE":
+            print("[Workflow] Product finding requested")
+            
+            # Create temp file for image
+            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_img:
+                image_path = tmp_img.name
+            
+            # Capture image
+            print("[Workflow] Capturing shelf image...")
+            if not capture_image(image_path):
+                print("[Workflow] Image capture failed")
+                return False
+            
+            # Send image + text to find-product
+            print("[Workflow] Sending image for analysis...")
+            query_text = transcribed_text
+            audio_response = send_image_to_find_product(image_path, query_text)
+            
+            if audio_response is None:
+                print("[Workflow] Product finding failed")
+                return False
+
         elif action_command == "INITIATE_VIDEO_CALL":
             print("[Workflow] Video call requested")
             

@@ -551,7 +551,7 @@ app.post("/identify-product", upload.single("image"), async (req, res) => {
 
     const mimeType = req.file.mimetype || "image/jpeg";
     const base64 = req.file.buffer.toString("base64");
-    const prompt = "which product is this, just answer the name of it";
+    const prompt = "which product is this, just answer the name of it/tell what the user (me) is holding";
 
     const resp = await client.responses.create({
       model: "gpt-4.1-mini",
