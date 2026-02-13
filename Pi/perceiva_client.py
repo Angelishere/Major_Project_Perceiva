@@ -70,6 +70,7 @@ LOGIN_ENDPOINT = f"{SERVER_URL}/login"
 PI_INTENT_ENDPOINT = f"{SERVER_URL}/pi_intent"
 MEDICAL_CHECK_ENDPOINT = f"{SERVER_URL}/medical-check"
 PRODUCT_IDENTIFICATION_ENDPOINT = f"{SERVER_URL}/identify-product"
+SCENE_DESCRIPTION_ENDPOINT = f"{SERVER_URL}/describe-scene"
 FASTAPI_URL = "https://chanel-confirmed-overprotectively.ngrok-free.dev"  # FastAPI STT/TTS service
 AUTH_TOKEN = None  # Set at runtime via login
 
@@ -104,21 +105,65 @@ LIVEKIT_AUDIO_CHUNK = 320  # 20ms @ 16kHz
 AUDIO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wav")
 
 def play_audio_file(filename: str):
-    """Play a local audio file using paplay (PulseAudio) or aplay (ALSA)"""
+    """
+    Play local wav sounds reliably.
+
+    Behaviour:
+    - If pacat (video call audio) is active → inject into same stream
+    - Otherwise use paplay normally
+    """
+
     filepath = os.path.join(AUDIO_DIR, filename)
+
     if not os.path.exists(filepath):
         print(f"[Audio] File not found: {filepath}")
         return
 
-    # Use specified PLAYBACK_COMMAND (paplay) or fallback to aplay if simple ALSA needed
-    cmd = [PLAYBACK_COMMAND, filepath]
-    
+    # If persistent pacat stream exists, use it
+    if audio_player and audio_player.stdin:
+        play_audio_via_pacat(filepath)
+        return
+
+    # Otherwise fallback to paplay
+    cmd = [
+        PLAYBACK_COMMAND,
+        "--latency-msec=50",
+        "--stream-name=perceiva-ui",
+        filepath
+    ]
+
     try:
-        # Run in background or foreground? For short cues, foreground is usually better to ensure sequence
-        # But for 'Calling...' loop it might need to be async. For now, simple blocking playback for cues.
-        subprocess.run(cmd, check=False, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        subprocess.run(cmd, check=False)
     except Exception as e:
         print(f"[Audio] Error playing {filename}: {e}")
+
+
+
+
+def play_audio_via_pacat(filepath: str):
+    """
+    Send WAV audio directly into existing pacat stream.
+    Assumes pacat configured as:
+        --rate 48000 --channels 1 --format s16le
+    """
+    global audio_player
+
+    if not audio_player or not audio_player.stdin:
+        print("[Audio] pacat not active, cannot route audio")
+        return
+
+    try:
+        with open(filepath, "rb") as f:
+            data = f.read()
+
+        # Skip standard WAV header (44 bytes)
+        pcm_data = data[44:]
+
+        audio_player.stdin.write(pcm_data)
+        audio_player.stdin.flush()
+
+    except Exception as e:
+        print(f"[Audio] pacat playback error: {e}")
 
 # =============================================================================
 # Audio Recording Functions
@@ -210,7 +255,7 @@ def record_with_touch_trigger(output_path: str) -> bool:
             
             if touch_active:
                 if not touch_start_played:
-                    play_audio_file("touch.wav")
+                    play_audio_file("touchnew.wav")
                     touch_start_played = True
                 
                 touch_released_time = None
@@ -391,7 +436,7 @@ def capture_image(output_path: str) -> bool:
         # Allow camera to warm up
         time.sleep(2)
         
-        play_audio_file("shutter.wav")
+        play_audio_file("shutternew.wav")
         print(f"[Camera] Capturing image to {output_path}...")
         picam.capture_file(output_path)
         
@@ -716,6 +761,77 @@ def send_image_to_product_identification(image_path: str) -> bytes:
 
     except Exception as e:
         print(f"[ProductID] Exception: {e}")
+        return None
+
+
+def send_image_to_scene_description(image_path: str) -> bytes:
+    """
+    Send image to /describe-scene endpoint and receive scene description,
+    then convert to audio via FastAPI TTS.
+
+    Args:
+        image_path: Path to the image file
+
+    Returns:
+        Audio bytes (WAV) or None on failure
+    """
+    if not AUTH_TOKEN:
+        print("[SceneDesc] ERROR: No AUTH_TOKEN set")
+        return None
+
+    print(f"[SceneDesc] Processing image: {image_path}")
+
+    try:
+        with open(image_path, "rb") as img_file:
+            files = {
+                "image": ("scene.jpg", img_file, "image/jpeg")
+            }
+            
+            print("[SceneDesc] Sending to server...")
+            response = requests.post(
+                SCENE_DESCRIPTION_ENDPOINT,
+                files=files,
+                timeout=30
+            )
+
+            if response.status_code != 200:
+                print(f"[SceneDesc] Error: HTTP {response.status_code}")
+                try:
+                    print(f"[SceneDesc] Error details: {response.json()}")
+                except:
+                    print(f"[SceneDesc] Response: {response.text[:200]}")
+                return None
+
+            # Parse response JSON
+            result = response.json()
+            scene_description = result.get("scene_description", "")
+            
+            print("[SceneDesc] Success!")
+            print(f"  - Description: {scene_description[:100]}...")
+
+            if not scene_description:
+                print("[SceneDesc] No description received")
+                return None
+
+            # Convert to audio
+            TTS_API = f"{FASTAPI_URL}/tts"
+            print("[SceneDesc] Converting result to audio...")
+
+            tts_response = requests.post(
+                TTS_API,
+                json={"text": scene_description},
+                timeout=30
+            )
+
+            if tts_response.status_code != 200:
+                print(f"[SceneDesc] TTS failed: HTTP {tts_response.status_code}")
+                return None
+
+            print(f"[SceneDesc] TTS audio received: {len(tts_response.content)} bytes")
+            return tts_response.content
+
+    except Exception as e:
+        print(f"[SceneDesc] Exception: {e}")
         return None
 
 
@@ -1224,6 +1340,27 @@ def process_single_interaction():
             
             if audio_response is None:
                 print("[Workflow] Product identification failed")
+                return False
+
+        elif action_command == "CAPTURE_ENVIRONMENT":
+            print("[Workflow] Scene description requested")
+            
+            # Create temp file for image
+            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_img:
+                image_path = tmp_img.name
+            
+            # Capture image
+            print("[Workflow] Capturing scene image...")
+            if not capture_image(image_path):
+                print("[Workflow] Image capture failed")
+                return False
+            
+            # Send image to describe-scene endpoint
+            print("[Workflow] Sending image for scene description...")
+            audio_response = send_image_to_scene_description(image_path)
+            
+            if audio_response is None:
+                print("[Workflow] Scene description failed")
                 return False
 
         elif action_command == "CAPTURE_MEDICAL_IMAGE":

@@ -271,6 +271,7 @@ Available modules:
 4. "Volunteer Video Call Module" - User wants to connect with a volunteer for video assistance
 5. "AI Assistance Module" - User wants general help, questions, or conversation
 6. "Currency Recognition Module" - User wants to identify currency notes or coins, know the denomination of money
+7. "Scene Description Module" - User wants to describe or identify the environment he/she is standing.
 
 Analyze this user speech and respond with ONLY the exact module name from the list above. Nothing else.
 
@@ -588,6 +589,57 @@ app.post("/identify-product", upload.single("image"), async (req, res) => {
     res.status(500).json({ message: "Server error during product identification", error: error.message });
   }
 });
+app.post("/describe-scene", upload.single("image"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: "No image uploaded", error: "Image file is required" });
+    }
+
+
+    const client = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY
+    });
+
+
+    const mimeType = req.file.mimetype || "image/jpeg";
+    const base64 = req.file.buffer.toString("base64");
+    const prompt = "You are helping a blind person to describe a scene in front of him/her. Describe the scene in a very short sentance";
+
+    const resp = await client.responses.create({
+      model: "gpt-4.1-mini",
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: prompt
+            },
+            {
+              type: "input_image",
+              image_url: `data:${mimeType};base64,${base64}`
+            }
+          ]
+        }
+      ]
+    });
+
+    const sceneDescription = (resp.output_text || "").trim().replace(/^["']|["']$/g, "");
+
+    if (!sceneDescription) {
+      return res.status(502).json({ message: "Could not describe scene from image" });
+    }
+
+    return res.status(200).json({
+      message: "Scene identified successfully",
+      scene_description: sceneDescription,
+      usage: resp.usage
+    });
+  } catch (error) {
+    console.error("Identify scene error:", error);
+    res.status(500).json({ message: "Server error during Scene identification", error: error.message });
+  }
+});
 
 app.post("/medical-check", authMiddleware, upload.single("image"), async (req, res) => {
   try {
@@ -746,6 +798,10 @@ app.post("/pi_intent", authMiddleware, async (req, res) => {
         actionCommand = "INITIATE_VIDEO_CALL";
         requiresImage = false;
         break;
+      case "Scene Description Module":
+        actionCommand = "CAPTURE_ENVIRONMENT";
+        requiresImage = true;
+        break
       case "AI Assistance Module":
       default:
         actionCommand = "AI_CONVERSATION";
