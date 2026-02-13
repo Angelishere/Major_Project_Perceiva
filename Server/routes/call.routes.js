@@ -174,6 +174,31 @@ router.get("/check-calls", authenticateToken, async (req, res) => {
   }
 });
 
+// Get status for a specific room (caller/callee polling)
+router.get("/status", authenticateToken, async (req, res) => {
+  try {
+    const roomID = String(req.query.roomID || "");
+    if (!roomID) {
+      return res.status(400).json({ error: "roomID required" });
+    }
+
+    const call = activeCalls.get(roomID);
+    if (!call) {
+      return res.status(404).json({ exists: false, status: "ended" });
+    }
+
+    const userId = req.user.userId;
+    const isParticipant = call.caller === userId || call.callee === userId;
+    if (!isParticipant) {
+      return res.status(403).json({ error: "Not a participant" });
+    }
+
+    return res.json({ exists: true, status: call.status, roomID });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Answer call
 router.post("/answer-call", authenticateToken, async (req, res) => {
   try {
@@ -182,6 +207,15 @@ router.post("/answer-call", authenticateToken, async (req, res) => {
 
     if (!call) {
       return res.status(404).json({ error: "Call not found" });
+    }
+
+    // Only the callee can answer a ringing call
+    if (call.callee !== req.user.userId) {
+      return res.status(403).json({ error: "Only callee can answer" });
+    }
+
+    if (call.status !== "ringing") {
+      return res.status(400).json({ error: `Call is not ringing (status=${call.status})` });
     }
 
     call.status = "active";
@@ -198,9 +232,15 @@ router.post("/end-call", authenticateToken, async (req, res) => {
     const call = activeCalls.get(roomID);
 
     if (call) {
+      const userId = req.user.userId;
+      const isParticipant = call.caller === userId || call.callee === userId;
+      if (!isParticipant) {
+        return res.status(403).json({ error: "Not a participant" });
+      }
+
       // Free the volunteer
-      await VolunteerProfile.findOneAndUpdate(
-        { user: call.callee },
+      await VolunteerProfile.updateMany(
+        { user: { $in: [call.caller, call.callee] } },
         { isAvailable: true }
       );
     }

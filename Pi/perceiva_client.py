@@ -31,6 +31,7 @@ import requests
 from pathlib import Path
 import asyncio
 import numpy as np
+import threading
 
 try:
     import pyaudio
@@ -967,6 +968,42 @@ async def initiate_video_call():
         room_id = data["roomID"]
         volunteer = data["volunteer"]
         print(f"✅ [VideoCall] Volunteer: {volunteer['username']}")
+
+        # ===== Wait for volunteer to answer =====
+        print("[VideoCall] Waiting for volunteer to answer...")
+        answered = False
+        wait_start = time.time()
+        ANSWER_TIMEOUT_SEC = 60
+
+        while time.time() - wait_start < ANSWER_TIMEOUT_SEC:
+            try:
+                status_resp = requests.get(
+                    f"{BACKEND_URL}/api/call/status",
+                    params={"roomID": room_id},
+                    headers=headers,
+                    timeout=5,
+                )
+
+                if status_resp.status_code == 200:
+                    status = status_resp.json().get("status")
+                    if status == "active":
+                        answered = True
+                        break
+                elif status_resp.status_code == 404:
+                    # Rejected/ended before answering
+                    print("[VideoCall] Call ended before answer")
+                    play_audio_file("Interaction_fail.wav")
+                    return False
+            except Exception:
+                # Temporary network hiccup; keep polling
+                pass
+
+            await asyncio.sleep(1)
+
+        if not answered:
+            print("[VideoCall] Timeout waiting for answer")
+            play_audio_file("Interaction_fail.wav")
+            return False
         
         # ===== Get LiveKit token =====
         print("[VideoCall] Getting LiveKit room token...")
@@ -1042,7 +1079,24 @@ async def initiate_video_call():
         # ===== Main video loop =====
         print("[VideoCall] Call active. Touch sensor to end call.")
         call_active = True
-        last_touch_check = time.time()
+        end_call_event = threading.Event()
+
+        # Prefer edge detection so brief touches reliably end the call
+        if GPIO:
+            try:
+                def _end_call_cb(_channel):
+                    if not end_call_event.is_set():
+                        print("[VideoCall] Touch detected (event) - ending call...")
+                        end_call_event.set()
+
+                GPIO.add_event_detect(
+                    TOUCH_SENSOR_PIN,
+                    GPIO.RISING,
+                    callback=_end_call_cb,
+                    bouncetime=250,
+                )
+            except Exception as e:
+                print(f"[VideoCall] GPIO event detect setup failed: {e}")
         
         try:
             while call_active:
@@ -1058,16 +1112,23 @@ async def initiate_video_call():
                     )
                 )
                 
-                # Check touch sensor every 100ms to end call
-                if time.time() - last_touch_check >= 0.1:
-                    if GPIO:
-                        # Real hardware: check GPIO pin
+                # End call requested via touch
+                if end_call_event.is_set():
+                    await asyncio.sleep(0.05)
+                    call_active = False
+                    continue
+
+                # Fallback polling (in case edge detection isn't available)
+                if GPIO and not end_call_event.is_set():
+                    try:
                         if GPIO.input(TOUCH_SENSOR_PIN) == GPIO.HIGH:
-                            print("[VideoCall] Touch detected - ending call...")
-                            time.sleep(0.3)  # Debounce
+                            print("[VideoCall] Touch detected (poll) - ending call...")
+                            await asyncio.sleep(0.2)  # Debounce (non-blocking)
                             call_active = False
-                    # In simulation mode, call continues until Ctrl+C
-                    last_touch_check = time.time()
+                    except Exception:
+                        pass
+                
+                # In simulation mode, call continues until Ctrl+C (or add a key listener if needed)
                 
                 await asyncio.sleep(1 / VIDEO_FPS)
                 
@@ -1084,6 +1145,12 @@ async def initiate_video_call():
     finally:
         # Cleanup
         print("[VideoCall] Cleaning up...")
+
+        if GPIO:
+            try:
+                GPIO.remove_event_detect(TOUCH_SENSOR_PIN)
+            except Exception:
+                pass
         
         # Stop audio player
         if audio_player:

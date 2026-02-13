@@ -1,24 +1,25 @@
-/* Page background */
+/* Page background - High Contrast Light Mode to match App Aesthetics */
 .page-container {
   min-height: 100vh;
   display: flex;
   justify-content: center;
   align-items: center;
-  background: linear-gradient(135deg, #667eea, #764ba2);
+  /* Light background to match Navbar and App */
+  background: #f4fff7;
   font-family: "Segoe UI", Arial, sans-serif;
+  color: #000000;
 }
 
-/* Login card – NO BORDER */
-.login-section {
+/* Scoped Login card */
+.page-container .login-section {
   background: #ffffff;
   width: 100%;
-  max-width: 420px;
-  padding: 35px 30px;
-  border-radius: 18px;
-
-  /* Removed border completely */
-  box-shadow: 0 25px 45px rgba(0, 0, 0, 0.22);
-
+  max-width: 450px;
+  padding: 40px 30px;
+  border-radius: 12px;
+  border: 3px solid #000000;
+  /* High contrast border */
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
   animation: fadeIn 0.6s ease-in-out;
 }
 
@@ -28,6 +29,7 @@
     opacity: 0;
     transform: translateY(20px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -35,99 +37,172 @@
 }
 
 /* Header */
-.login-header {
+.page-container .login-header {
   text-align: center;
+  margin-bottom: 30px;
+}
+
+.page-container .login-header h1 {
+  font-size: 32px;
+  margin-bottom: 10px;
+  color: #000000;
+  font-weight: 800;
+}
+
+.page-container .login-header p {
+  font-size: 18px;
+  color: #222222;
+  /* Very dark gray */
+  font-weight: 600;
+}
+
+/* Form - Scoped Styles */
+.page-container .login-form {
   margin-bottom: 25px;
 }
 
-.login-header h1 {
-  font-size: 30px;
-  margin-bottom: 6px;
-  color: #2d3748;
+.page-container .form-group {
+  margin-bottom: 22px;
 }
 
-.login-header p {
-  font-size: 15px;
-  color: #718096;
-}
-
-/* Form */
-.login-form {
-  margin-bottom: 20px;
-}
-
-.form-group {
-  margin-bottom: 18px;
-}
-
-label {
+.page-container label {
   display: block;
-  margin-bottom: 6px;
-  font-weight: 600;
-  color: #2d3748;
+  margin-bottom: 8px;
+  font-weight: 700;
+  color: #000000;
+  font-size: 18px;
 }
 
-input {
-  width: 90%;               /* reduced width */
-  padding: 12px 14px;
-  font-size: 16px;
-  border-radius: 10px;
-  border: 1px solid #cbd5e0;
-  display: block;
-  margin: 0 auto;           /* centers input */
-  transition: border 0.2s, box-shadow 0.2s;
-}
-
-input::placeholder {
-  color: #a0aec0;
-}
-
-input:focus {
-  outline: none;
-  border-color: #667eea;
-  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.25);
-}
-
-/* Button */
-.login-button {
+/* Specific targeting of inputs within the page container to avoid global leak */
+.page-container input,
+.page-container select {
   width: 100%;
   padding: 14px;
   font-size: 18px;
-  border-radius: 12px;
-  border: none;
-
-  background: linear-gradient(135deg, #667eea, #764ba2);
-  color: #ffffff;
-  cursor: pointer;
-  margin-top: 10px;
-
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  border-radius: 8px;
+  border: 2px solid #555555;
+  /* Strong border */
+  display: block;
+  box-sizing: border-box;
+  transition: all 0.2s;
+  background-color: #ffffff;
+  color: #000000;
 }
 
-.login-button:hover {
+.page-container input::placeholder {
+  color: #555555;
+  opacity: 1;
+}
+
+/* High Visibility Focus State */
+.page-container input:focus,
+.page-container select:focus {
+  outline: 3px solid #000000;
+  outline-offset: 2px;
+  border-color: #000000;
+  background-color: #f0fdf4;
+  /* Very subtle green tint to match theme on focus */
+}
+
+/* Button */
+.page-container .login-button {
+  width: 100%;
+  padding: 16px;
+  font-size: 20px;
+  font-weight: 700;
+  border-radius: 8px;
+  border: 3px solid #000000;
+  /* High contrast border */
+  /* Using a dark green to match app theme but ensuring sufficient contrast, or black */
+  background: #000000;
+  /* Keeping black for guaranteed accessibility */
+  color: #ffffff;
+  cursor: pointer;
+  margin-top: 15px;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.page-container .login-button:hover {
+  background: #222222;
   transform: translateY(-2px);
-  box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+}
+
+.page-container .login-button:focus {
+  outline: 4px solid #ffcc00;
+  outline-offset: 2px;
 }
 
 /* Footer */
-.login-footer {
+.page-container .login-footer {
   text-align: center;
-  font-size: 14px;
-  margin-top: 15px;
+  font-size: 16px;
+  margin-top: 25px;
+  color: #000000;
 }
 
-.login-footer a {
-  color: #667eea;
-  font-weight: 600;
+.page-container .login-footer a {
+  color: #004d40;
+  /* Dark accessible green/blue */
+  font-weight: 700;
+  text-decoration: underline;
+  padding: 5px;
+}
+
+.page-container .login-footer a:hover {
+  background-color: #e0f2f1;
   text-decoration: none;
 }
 
-.login-footer a:hover {
-  text-decoration: underline;
+.page-container .login-footer a:focus {
+  outline: 3px solid #000000;
+  background-color: #ffcc00;
 }
 
 /* Screen-reader only */
-.sr-only {
+.page-container .sr-only {
   position: absolute;
-  left: -10000px;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* Responsive Design */
+
+@media (max-width: 768px) {
+  .page-container .login-section {
+    max-width: 90%;
+    padding: 30px 20px;
+    border-width: 2px;
+  }
+}
+
+@media (max-width: 480px) {
+  .page-container {
+    padding: 10px;
+    background: #ffffff;
+    /* White bg on mobile to reduce visual noise */
+  }
+
+  .page-container .login-section {
+    padding: 20px 15px;
+    box-shadow: none;
+    border: none;
+    /* Simplify on mobile */
+  }
+
+  .page-container .login-header h1 {
+    font-size: 26px;
+  }
+
+  .page-container input,
+  .page-container select,
+  .page-container .login-button {
+    font-size: 16px;
+    padding: 14px;
+  }
 }
