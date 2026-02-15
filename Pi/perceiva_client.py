@@ -67,7 +67,6 @@ except ImportError:
 
 # Server Configuration
 SERVER_URL = "http://192.168.53.134:4000"
-LOGIN_ENDPOINT = f"{SERVER_URL}/login"
 PI_INTENT_ENDPOINT = f"{SERVER_URL}/pi_intent"
 MEDICAL_CHECK_ENDPOINT = f"{SERVER_URL}/medical-check"
 PRODUCT_IDENTIFICATION_ENDPOINT = f"{SERVER_URL}/identify-product"
@@ -95,6 +94,7 @@ PLAYBACK_COMMAND = "paplay"  # PulseAudio playback (routes to Bluetooth A2DP)
 
 # LiveKit Video Call Configuration
 BACKEND_URL = os.environ.get("PERCEIVA_BACKEND_URL", "https://major-project-perceiva.onrender.com")
+LOGIN_ENDPOINT = f"{BACKEND_URL}/login"
 VIDEO_WIDTH = 960
 VIDEO_HEIGHT = 540
 VIDEO_FPS = 24
