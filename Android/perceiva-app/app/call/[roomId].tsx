@@ -18,7 +18,7 @@ import {
     VideoPresets,
     ConnectionState,
 } from "livekit-client";
-import { VideoView } from "@livekit/react-native";
+import { VideoView, AudioSession } from "@livekit/react-native";
 import api from "../../api/api";
 import { useCall } from "../../context/CallContext";
 
@@ -30,12 +30,13 @@ type TrackInfo = {
 };
 
 export default function CallScreen() {
-    const { roomId } = useLocalSearchParams<{ roomId: string }>();
+    const { roomId, targetUserId } = useLocalSearchParams<{ roomId: string; targetUserId: string }>();
     const { setActiveCall } = useCall();
 
     const [status, setStatus] = useState<"waiting" | "connecting" | "connected" | "ended">("waiting");
     const [localTrack, setLocalTrack] = useState<any>(null);
     const [remoteTracks, setRemoteTracks] = useState<TrackInfo[]>([]);
+    const [muted, setMuted] = useState(false);
     const [logs, setLogs] = useState<string[]>([]);
 
     const roomRef = useRef<Room | null>(null);
@@ -108,9 +109,21 @@ export default function CallScreen() {
     // ─── Initialize LiveKit call ──────────────────────────────
     async function initCall() {
         try {
+            // Route audio to loudspeaker instead of earpiece
+            await AudioSession.configureAudio({
+                android: {
+                    preferredOutputList: ["speaker"],
+                    audioTypeOptions: {
+                        manageAudioFocus: true,
+                        audioMode: "inCommunication",
+                    },
+                },
+            });
+            await AudioSession.startAudioSession();
+
             // Get LiveKit token from backend
             const res = await api.post("/api/call/get-room", {
-                targetUserId: null, // Server uses roomID to determine participants
+                targetUserId: targetUserId,
             });
 
             const { livekitUrl, token } = res.data;
@@ -303,20 +316,21 @@ export default function CallScreen() {
                 )}
             </View>
 
-            {/* Local Video (small overlay) */}
-            {localTrack && (
-                <View style={styles.localVideoContainer}>
-                    <VideoView
-                        style={styles.localVideo}
-                        videoTrack={localTrack}
-                        objectFit="cover"
-                        mirror={true}
-                    />
-                </View>
-            )}
 
-            {/* End Call Button */}
+
+            {/* Controls */}
             <View style={styles.controlsBar}>
+                <TouchableOpacity
+                    style={[styles.muteButton, muted && styles.muteButtonActive]}
+                    onPress={() => {
+                        const newMuted = !muted;
+                        setMuted(newMuted);
+                        roomRef.current?.localParticipant?.setMicrophoneEnabled(!newMuted);
+                    }}
+                    activeOpacity={0.8}
+                >
+                    <Text style={styles.muteText}>{muted ? "🔇 Unmute" : "🎙️ Mute"}</Text>
+                </TouchableOpacity>
                 <TouchableOpacity
                     style={styles.endCallButton}
                     onPress={handleEndCall}
@@ -400,7 +414,24 @@ const styles = StyleSheet.create({
         bottom: 40,
         left: 0,
         right: 0,
+        flexDirection: "row",
+        justifyContent: "center",
         alignItems: "center",
+        gap: 16,
+    },
+    muteButton: {
+        paddingVertical: 14,
+        paddingHorizontal: 24,
+        backgroundColor: "#555",
+        borderRadius: 30,
+    },
+    muteButtonActive: {
+        backgroundColor: "#ffc107",
+    },
+    muteText: {
+        color: "#fff",
+        fontSize: 16,
+        fontWeight: "700",
     },
     endCallButton: {
         paddingVertical: 14,

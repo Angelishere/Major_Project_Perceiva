@@ -59,7 +59,7 @@ function BlindHome() {
             setActiveCall({ user: volunteer, roomID });
 
             // Navigate to the video call screen
-            router.push(`/call/${roomID}` as Href);
+            router.push(`/call/${roomID}?targetUserId=${volunteer._id}` as Href);
             setCalling(false);
         } catch (error: any) {
             console.error("Failed to request volunteer:", error);
@@ -77,7 +77,7 @@ function BlindHome() {
             setActiveCall({ user: call.caller, roomID: call.roomID });
 
             // Navigate to the video call screen
-            router.push(`/call/${call.roomID}` as Href);
+            router.push(`/call/${call.roomID}?targetUserId=${call.caller.id || call.caller._id}` as Href);
         } catch (error) {
             console.error("Failed to answer call:", error);
         }
@@ -178,7 +178,7 @@ function VolunteerHome() {
             setActiveCall({ user: callerUser, roomID: call.roomID });
 
             // Navigate to the video call screen
-            router.push(`/call/${call.roomID}` as Href);
+            router.push(`/call/${call.roomID}?targetUserId=${callerUser._id}` as Href);
         } catch (error) {
             console.error("Failed to answer call:", error);
         }
