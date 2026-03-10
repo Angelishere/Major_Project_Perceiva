@@ -1,0 +1,372 @@
+%==================================appendix.tex=============================
+\newpage
+\begin{spacing}{1.5}
+%
+\chapter*{APPENDIX}
+%\addcontentsline{toc}{chapter}{\numberline{}Appendix}%
+\addcontentsline{toc}{chapter}{Appendix}%
+
+\thispagestyle{empty}
+%%
+\noindent \textbf{CODE SNIPPETS}\\
+
+%% ===================================================================
+%% SECTION A: BACKEND SERVER (Node.js)
+%% ===================================================================
+
+\noindent \textbf{A. Backend Server (Node.js)}\\
+
+\noindent \textbf{A.1 JWT Authentication Middleware}\\
+Description: Protects API routes by verifying JSON Web Tokens from incoming requests. The decoded user payload (userId, role, username) is attached to the request for downstream use.
+\begin{verbatim}
+const authMiddleware = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer "))
+    return res.status(401).json({ message: "No token" });
+
+  const token = authHeader.split(" ")[1];
+  try {
+    req.user = jwt.verify(token, process.env.JWT_SECRET);
+    next();
+  } catch (err) {
+    return res.status(401).json({ message: "Invalid token" });
+  }
+};
+\end{verbatim}
+
+\noindent \textbf{A.2 User Intent Classification (Gemini AI)}\\
+Description: Classifies the user's transcribed speech into one of seven assistance modules using a Google Gemini prompt. The returned module name drives the Pi client's next action.
+\begin{verbatim}
+async function identifyUserIntent(transcribedText) {
+  const intentPrompt = `You are an intent classifier.
+Available modules:
+1. "Product Identification Module"
+2. "Medical Compatibility Module"
+3. "Currency Recognition Module"
+4. "Volunteer Video Call Module"
+5. "AI Assistance Module"
+6. "Scene Description Module"
+7. "Price Comparison Module"
+Respond with ONLY the exact module name.
+User said: "${transcribedText}"`;
+
+  const resp = await gemini.models.generateContent({
+    model: "gemini-2.5-flash", contents: intentPrompt
+  });
+  return (resp.text || "AI Assistance Module").trim();
+}
+\end{verbatim}
+
+\noindent \textbf{A.3 Intent-to-Action Mapping (/pi\_intent Route)}\\
+Description: Maps the detected intent module to an action command that the Raspberry Pi client executes. For AI conversation intents, the response is generated inline via Gemini.
+\begin{verbatim}
+switch (detectedModule) {
+  case "Product Identification Module":
+    actionCommand = "CAPTURE_PRODUCT_IMAGE"; break;
+  case "Medical Compatibility Module":
+    actionCommand = "CAPTURE_MEDICAL_IMAGE"; break;
+  case "Currency Recognition Module":
+    actionCommand = "CAPTURE_CURRENCY_IMAGE"; break;
+  case "Volunteer Video Call Module":
+    actionCommand = "INITIATE_VIDEO_CALL"; break;
+  case "Scene Description Module":
+    actionCommand = "CAPTURE_ENVIRONMENT"; break;
+  default:
+    actionCommand = "AI_CONVERSATION"; break;
+}
+\end{verbatim}
+\thispagestyle{empty}
+\noindent \textbf{A.4 Product Identification using GPT Vision}\\
+Description: Sends a Base64-encoded product image to the OpenAI GPT-4 Vision API, which returns only the brand and product name.
+\begin{verbatim}
+async function identifyProductWithGPT(imageBuffer, mimeType) {
+  const base64 = imageBuffer.toString("base64");
+  const resp = await client.responses.create({
+    model: "gpt-4.1-mini",
+    input: [{
+      role: "user",
+      content: [
+        { type: "input_text",
+          text: "Reply with ONLY the product name." },
+        { type: "input_image",
+          image_url: `data:${mimeType};base64,${base64}` }
+      ]
+    }]
+  });
+  return (resp.output_text || "").trim();
+}
+\end{verbatim}
+
+\noindent \textbf{A.5 Medical Compatibility Check (Core Pipeline)}\\
+Description: Identifies a product from its image, fetches ingredient data via SerpAPI, and queries Gemini for medical consumability advice based on the user's stored health profile.
+\begin{verbatim}
+// Step 1: Identify product from image
+const productName = await identifyProductWithGPT(
+  req.file.buffer, req.file.mimetype);
+
+// Step 2: Search ingredients via SerpAPI
+const serpData = await searchSerpApi(
+  `${productName} ingredients and allergens`);
+
+// Step 3: Get consumability advice from Gemini
+const aiAdvice = await getConsumabilityAdviceWithGemini({
+  productName, serpData,
+  medicalProfile: blindProfile
+});
+
+return res.status(200).json({
+  product_name: productName, advice: aiAdvice
+});
+\end{verbatim}
+
+\noindent \textbf{A.6 Volunteer Matching (Atomic Lock)}\\
+Description: When a blind user requests a video call, the server atomically finds and locks an available volunteer, generates a deterministic LiveKit room ID, and returns connection credentials.
+\begin{verbatim}
+const volunteer = await VolunteerProfile.findOneAndUpdate(
+  { isAvailable: true, consentGiven: true },
+  { isAvailable: false },
+  { new: true }
+).populate("user", "username email _id");
+
+const roomID = generateRoomId(blindId, volunteerId);
+res.json({ success: true, roomID, volunteer });
+\end{verbatim}
+\thispagestyle{empty}
+%% ===================================================================
+%% SECTION B: RASPBERRY PI CLIENT (Python)
+%% ===================================================================
+
+\noindent \textbf{B. Raspberry Pi Client (Python)}\\
+
+\noindent \textbf{B.1 Hardware Configuration}\\
+Description: Defines the hardware interface constants for the INMP441 I$^2$S microphone, TTP223 touch sensor, and audio recording parameters on the Raspberry Pi Zero 2 W.
+\begin{verbatim}
+TOUCH_SENSOR_PIN = 17    # GPIO17 - TTP223 OUT
+AUDIO_DEVICE     = "hw:0,0"
+SAMPLE_RATE      = 16000
+CHANNELS         = 2
+RECORD_FORMAT    = "S32_LE"  # 32-bit signed LE
+MIN_RECORD_DURATION = 0.5   # seconds
+MAX_RECORD_DURATION = 30.0  # seconds
+SILENCE_THRESHOLD   = 2.0   # seconds
+\end{verbatim}
+
+\noindent \textbf{B.2 Touch-Triggered Audio Recording (Key Logic)}\\
+Description: Records audio via \texttt{arecord} while the touch sensor is held. The recording loop polls the GPIO pin at 50ms intervals and stops after the sensor is released for the silence threshold duration.
+\begin{verbatim}
+process = subprocess.Popen(
+    ["arecord", "-D", AUDIO_DEVICE, "-f", RECORD_FORMAT,
+     "-r", str(SAMPLE_RATE), "-c", str(CHANNELS),
+     "-t", "wav", output_path])
+
+while True:
+    elapsed = time.time() - start_time
+    if elapsed >= MAX_RECORD_DURATION:
+        break
+
+    touch_active = GPIO.input(TOUCH_SENSOR_PIN) == GPIO.HIGH
+    if touch_active:
+        touch_released_time = None
+    else:
+        if touch_released_time is None:
+            touch_released_time = time.time()
+        elif (time.time() - touch_released_time
+                >= SILENCE_THRESHOLD):
+            break
+
+    time.sleep(0.05)  # 50ms polling
+
+process.terminate()
+\end{verbatim}
+
+\noindent \textbf{B.3 Speech-to-Text via FastAPI}\\
+Description: Sends the recorded WAV file to the FastAPI speech-to-text service and returns the transcribed text.
+\begin{verbatim}
+def speech_to_text(audio_path: str) -> str:
+    with open(audio_path, 'rb') as audio_file:
+        files = {'file': ('recording.wav',
+                          audio_file, 'audio/wav')}
+        response = requests.post(
+            f"{FASTAPI_URL}/stt-upload",
+            files=files, timeout=60)
+
+    result = response.json()
+    return result.get('text', '').strip() or None
+\end{verbatim}
+\thispagestyle{empty}
+\noindent \textbf{B.4 Main Interaction Workflow (Dispatch Logic)}\\
+Description: After recording and transcribing the user's voice, the client sends the text to the server for intent detection. Based on the returned action command, it dispatches to the appropriate handler --- capturing images, initiating video calls, or playing AI conversation responses.
+\begin{verbatim}
+# Record audio and transcribe
+success = record_with_touch_trigger(recording_path)
+transcribed_text = speech_to_text(recording_path)
+intent_data = send_text_to_intent(transcribed_text)
+
+action = intent_data.get('action_command', '')
+
+if action == "CAPTURE_PRODUCT_IMAGE":
+    capture_image(image_path)
+    audio = send_image_to_product_identification(image_path)
+
+elif action == "CAPTURE_MEDICAL_IMAGE":
+    capture_image(image_path)
+    audio = send_image_to_medical_check(image_path)
+
+elif action == "CAPTURE_CURRENCY_IMAGE":
+    capture_image(image_path)
+    audio = send_image_to_currency_recognition(image_path)
+
+elif action == "INITIATE_VIDEO_CALL":
+    asyncio.run(initiate_video_call())
+
+elif action == "AI_CONVERSATION":
+    ai_text = intent_data.get('ai_response')
+    audio = requests.post(
+        f"{FASTAPI_URL}/tts",
+        json={"text": ai_text}).content
+
+if audio:
+    play_audio_pulseaudio(audio)
+\end{verbatim}
+
+\noindent \textbf{B.5 GPIO Setup and Main Loop}\\
+Description: Initializes the TTP223 touch sensor on GPIO17 and runs the main event loop, which waits for touch activation and processes each interaction.
+\begin{verbatim}
+def setup_gpio():
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(TOUCH_SENSOR_PIN, GPIO.IN)
+
+def main():
+    if not login():
+        return
+    setup_gpio()
+    try:
+        while True:
+            if not wait_for_touch():
+                break
+            process_single_interaction()
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        GPIO.cleanup()
+
+if __name__ == "__main__":
+    main()
+\end{verbatim}
+
+%% ===================================================================
+%% SECTION C: FASTAPI ML SERVER (Python)
+%% ===================================================================
+
+\noindent \textbf{C. FastAPI ML Server (Python)}\\
+
+\noindent \textbf{C.1 Speech-to-Text using OpenAI Whisper}\\
+Description: Receives an uploaded audio file, saves it temporarily, and transcribes it using the Whisper \texttt{turbo} model with forced English language detection. The transcribed text is returned as JSON.
+\begin{verbatim}
+whisper_model = whisper.load_model("turbo")
+
+@app.post("/stt-upload")
+async def stt_upload(file: UploadFile = File(...)):
+    with tempfile.NamedTemporaryFile(
+        delete=False, suffix=suffix) as tmp:
+        contents = await file.read()
+        tmp.write(contents)
+        temp_path = tmp.name
+
+    result = whisper_model.transcribe(
+        temp_path, language="en")
+    text = result.get("text", "")
+    os.remove(temp_path)
+    return {"text": text}
+\end{verbatim}
+
+\noindent \textbf{C.2 Text-to-Speech using Kokoro TTS}\\
+Description: Converts input text to natural-sounding speech audio using the Kokoro TTS pipeline. The generated audio chunks are concatenated and returned as a streaming WAV response.
+\begin{verbatim}
+pipeline = KPipeline(lang_code="a")
+
+@app.post("/tts")
+def tts(text: str = Body(..., embed=True)):
+    generator = pipeline(text, voice="af_heart")
+
+    chunks = []
+    for _, _, audio in generator:
+        chunks.append(audio)
+
+    full_audio = np.concatenate(chunks)
+    buffer = io.BytesIO()
+    sf.write(buffer, full_audio, 24000, format="WAV")
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer, media_type="audio/wav")
+\end{verbatim}
+\thispagestyle{empty}
+\noindent \textbf{C.3 Currency Recognition (ConvNeXt + Prototypical Network)}\\
+Description: Uses a ConvNeXt-Tiny backbone with a learned embedding projection head for few-shot currency recognition. The model compares the input image embedding against stored class prototypes using cosine similarity with a learned temperature scale.
+\begin{verbatim}
+class ConvNeXtIncremental(nn.Module):
+    def __init__(self, embedding_dim=256):
+        super().__init__()
+        backbone = torchvision.models.convnext_tiny()
+        self.features = backbone.features
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        in_features = backbone.classifier[2].in_features
+        self.proj = nn.Sequential(
+            nn.Linear(in_features, 512),
+            nn.LayerNorm(512), nn.ReLU(),
+            nn.Linear(512, embedding_dim))
+
+    def forward(self, x):
+        x = self.features(x)
+        x = self.pool(x).flatten(1)
+        return F.normalize(self.proj(x), p=2, dim=1)
+
+@app.post("/currency-recognition")
+async def currencyRecognition(file: UploadFile):
+    img = Image.open(io.BytesIO(await file.read()))
+    x = currency_transform(img).unsqueeze(0).to(DEVICE)
+
+    with torch.no_grad():
+        emb = currency_model(x)
+        sims = torch.mm(emb, currency_prototypes.t())
+        probs = F.softmax(sims * currency_scale, dim=1)
+
+    return {
+        "prediction": currency_classes[
+            probs.argmax(1).item()],
+        "confidence": float(probs.max().item())
+    }
+\end{verbatim}
+
+\noindent \textbf{C.4 YOLO-Based Object Detection and Cropping}\\
+Description: Runs YOLOv8 inference on uploaded images to detect objects. Each detection is cropped with configurable padding and saved as an individual image for downstream processing.
+\begin{verbatim}
+yolo_model = YOLO(MODEL_PATH)
+
+@app.post("/detect-crop")
+async def detect_crop(file: UploadFile = File(...)):
+    data = await file.read()
+    image = cv2.imdecode(
+        np.frombuffer(data, np.uint8),
+        cv2.IMREAD_COLOR)
+
+    results = yolo_model.predict(
+        source=image, conf=0.25)
+
+    for result in results:
+        for box in result.boxes:
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            # Apply padding and crop
+            cropped = image[y1p:y2p, x1p:x2p]
+            cv2.imwrite(str(crop_path), cropped)
+
+    return {"ok": True, "crops": crop_count}
+\end{verbatim}
+
+%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%
+
+
+\end{spacing}
