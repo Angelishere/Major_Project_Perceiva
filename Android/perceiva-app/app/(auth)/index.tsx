@@ -58,25 +58,9 @@ function BlindHome() {
 
             setActiveCall({ user: volunteer, roomID });
 
-            // Video call is deferred — show placeholder
-            Alert.alert(
-                "Call Connected",
-                `Connected to ${volunteer?.username || "volunteer"}.\n\nVideo calls are coming soon in the next update.`,
-                [
-                    {
-                        text: "End Call",
-                        onPress: async () => {
-                            try {
-                                await api.post("/api/call/end-call", { roomID });
-                            } catch (e) {
-                                console.error("Failed to end call:", e);
-                            }
-                            setActiveCall(null);
-                            setCalling(false);
-                        },
-                    },
-                ]
-            );
+            // Navigate to the video call screen
+            router.push(`/call/${roomID}` as Href);
+            setCalling(false);
         } catch (error: any) {
             console.error("Failed to request volunteer:", error);
             Alert.alert(
@@ -92,23 +76,8 @@ function BlindHome() {
             await api.post("/api/call/answer-call", { roomID: call.roomID });
             setActiveCall({ user: call.caller, roomID: call.roomID });
 
-            Alert.alert(
-                "Call Answered",
-                "Video calls are coming soon in the next update.",
-                [
-                    {
-                        text: "End Call",
-                        onPress: async () => {
-                            try {
-                                await api.post("/api/call/end-call", { roomID: call.roomID });
-                            } catch (e) {
-                                console.error(e);
-                            }
-                            setActiveCall(null);
-                        },
-                    },
-                ]
-            );
+            // Navigate to the video call screen
+            router.push(`/call/${call.roomID}` as Href);
         } catch (error) {
             console.error("Failed to answer call:", error);
         }
@@ -208,23 +177,8 @@ function VolunteerHome() {
             };
             setActiveCall({ user: callerUser, roomID: call.roomID });
 
-            Alert.alert(
-                "Call Answered",
-                `Connected to ${callerUser?.username || "user"}.\n\nVideo calls are coming soon in the next update.`,
-                [
-                    {
-                        text: "End Call",
-                        onPress: async () => {
-                            try {
-                                await api.post("/api/call/end-call", { roomID: call.roomID });
-                            } catch (e) {
-                                console.error(e);
-                            }
-                            setActiveCall(null);
-                        },
-                    },
-                ]
-            );
+            // Navigate to the video call screen
+            router.push(`/call/${call.roomID}` as Href);
         } catch (error) {
             console.error("Failed to answer call:", error);
         }
