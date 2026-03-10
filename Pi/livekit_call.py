@@ -13,7 +13,7 @@ from picamera2 import Picamera2
 
 # ================= CONFIG =================
 BACKEND_URL = "https://major-project-perceiva.onrender.com"
-AUTH_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2OTdhMWM2NzcyMGRhYTliYzBkYjMzZGQiLCJ1c2VybmFtZSI6ImFyanVuIiwicm9sZSI6ImJsaW5kIiwiaWF0IjoxNzcwNDMyMDgxLCJleHAiOjE3NzA0MzU2ODF9.ImMKJp75pIJbCosMavOwZvXXEiaX-ajRJy5YRz0kgUk"
+AUTH_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2OTdhMWM2NzcyMGRhYTliYzBkYjMzZGQiLCJ1c2VybmFtZSI6ImFyanVuIiwicm9sZSI6ImJsaW5kIiwiaWF0IjoxNzcwOTQ4MDEyLCJleHAiOjE3NzA5NTE2MTJ9.pkHBTQ5nlNgSfRp65DCqG2vQQA7U5mHVguqIFAYEUBg"
 
 WIDTH, HEIGHT = 960, 540
 FPS = 24

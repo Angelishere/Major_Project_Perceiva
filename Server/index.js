@@ -73,16 +73,34 @@ const upload = multer(
   }
 )
 
+/**
+ * Flatten SerpAPI google_ai_mode text_blocks into plain readable text.
+ * Handles paragraph, heading, and list block types.
+ */
+function flattenSerpBlocks(serpData) {
+  if (!Array.isArray(serpData)) return "";
+
+  const lines = [];
+  for (const block of serpData) {
+    if (block.type === "paragraph" || block.type === "heading") {
+      if (block.snippet) lines.push(block.snippet);
+    } else if (block.type === "list" && Array.isArray(block.list)) {
+      for (const item of block.list) {
+        if (typeof item === "string") lines.push(item);
+        else if (item && item.snippet) lines.push(item.snippet);
+      }
+    }
+  }
+  return lines.filter(Boolean).join("\n");
+}
+
 async function extractIngredientsWithGemini(serpData) {
   if (!Array.isArray(serpData) || serpData.length === 0) {
     return { ingredients: [], allergens: [], warnings: [] };
   }
 
-  // 1) Convert SERP objects into readable text
-  const searchText = serpData
-    .map(item => item.snippet)
-    .filter(Boolean)
-    .join("\n\n");
+  // Convert SERP blocks into readable text
+  const searchText = flattenSerpBlocks(serpData);
 
   const prompt = `
 Extract ingredients and common allergens from the text below.
@@ -136,44 +154,30 @@ async function getConsumabilityAdviceWithGemini({
     return "Insufficient ingredient information available for this product. Please consult a healthcare professional before consuming.";
   }
 
-  // Convert SERP objects into readable text
-  const searchText = serpData
-    .map(item => item.snippet)
-    .filter(Boolean)
-    .join("\n\n");
+  // Convert SERP blocks into readable text
+  const searchText = flattenSerpBlocks(serpData);
 
   const prompt = `
-You are a qualified medical nutritionist advising a visually impaired patient.
+You are a medical nutritionist giving brief spoken advice to a visually impaired patient.
 
-Patient medical history:
-- Allergies: ${medicalProfile.allergies.length ? medicalProfile.allergies.join(", ") : "none"}
-- Medical conditions: ${medicalProfile.medicalConditions.length ? medicalProfile.medicalConditions.join(", ") : "none"}
-- Dietary preferences: ${medicalProfile.dietaryPreferences.length ? medicalProfile.dietaryPreferences.join(", ") : "none"}
+Patient: Allergies: ${medicalProfile.allergies.length ? medicalProfile.allergies.join(", ") : "none"} | Conditions: ${medicalProfile.medicalConditions.length ? medicalProfile.medicalConditions.join(", ") : "none"} | Diet: ${medicalProfile.dietaryPreferences.length ? medicalProfile.dietaryPreferences.join(", ") : "none"}
 
-Product under consideration:
-${productName}
+Product: ${productName}
 
-Ingredient-related information from reliable sources (verbatim, unfiltered):
+Source info:
 ${searchText}
 
-Your task:
-Carefully assess whether this product is appropriate for the patient.
+Rules:
+- Use ONLY the info above. Do not invent ingredients.
+- Be medically conservative. If any risk exists, advise against it.
+- If info is insufficient, say so.
 
-Guidelines:
-- Base your advice ONLY on the information provided above.
-- Do NOT assume or invent ingredients.
-- Be medically conservative.
-- If there is any meaningful risk, advise against consumption.
-- If information is insufficient, clearly say so.
-
-Response style:
-- Write as a doctor or clinical nutritionist speaking directly to the patient.
-- Use clear, calm, and supportive language.
-- Avoid technical jargon.
-- Do NOT mention probabilities, percentages, or internal reasoning.
-- Do NOT output JSON, bullet points, headings, or labels.
-
-Return ONLY the medical advice.
+CRITICAL FORMAT RULES:
+- Reply in EXACTLY 2-3 short sentences, maximum 40 words total.
+- Start directly with the verdict: "Safe to consume." or "Avoid this product." or "Not enough information."
+- Then give ONE brief reason.
+- No greetings, no elaboration, no bullet points, no JSON.
+- Output must be plain spoken English suitable for text-to-speech. No symbols, no asterisks, no markdown, no special characters, no newlines.
 `;
 
 
@@ -185,8 +189,13 @@ Return ONLY the medical advice.
 
     const rawText = response.text || "";
 
-    // Return the plain text advice directly
-    return rawText.trim();
+    // Sanitize for TTS: strip newlines, markdown symbols, and extra whitespace
+    const ttsClean = rawText
+      .replace(/[\r\n]+/g, " ")       // newlines to spaces
+      .replace(/[*#_~`>|\-•]+/g, "") // strip markdown/bullet symbols
+      .replace(/\s{2,}/g, " ")        // collapse multiple spaces
+      .trim();
+    return ttsClean;
 
   } catch (err) {
     console.error("❌ Gemini consumability error:", err.message);
@@ -262,6 +271,7 @@ Available modules:
 4. "Volunteer Video Call Module" - User wants to connect with a volunteer for video assistance
 5. "AI Assistance Module" - User wants general help, questions, or conversation
 6. "Currency Recognition Module" - User wants to identify currency notes or coins, know the denomination of money
+7. "Scene Description Module" - User wants to describe or identify the environment he/she is standing.
 
 Analyze this user speech and respond with ONLY the exact module name from the list above. Nothing else.
 
@@ -542,7 +552,7 @@ app.post("/identify-product", upload.single("image"), async (req, res) => {
 
     const mimeType = req.file.mimetype || "image/jpeg";
     const base64 = req.file.buffer.toString("base64");
-    const prompt = "which product is this, just answer the name of it";
+    const prompt = "which product is this, just answer the name of it/tell what the user (me) is holding";
 
     const resp = await client.responses.create({
       model: "gpt-4.1-mini",
@@ -577,6 +587,57 @@ app.post("/identify-product", upload.single("image"), async (req, res) => {
   } catch (error) {
     console.error("Identify product error:", error);
     res.status(500).json({ message: "Server error during product identification", error: error.message });
+  }
+});
+app.post("/describe-scene", upload.single("image"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: "No image uploaded", error: "Image file is required" });
+    }
+
+
+    const client = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY
+    });
+
+
+    const mimeType = req.file.mimetype || "image/jpeg";
+    const base64 = req.file.buffer.toString("base64");
+    const prompt = "You are helping a blind person to describe a scene in front of him/her. Describe the scene in a very short sentance";
+
+    const resp = await client.responses.create({
+      model: "gpt-4.1-mini",
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: prompt
+            },
+            {
+              type: "input_image",
+              image_url: `data:${mimeType};base64,${base64}`
+            }
+          ]
+        }
+      ]
+    });
+
+    const sceneDescription = (resp.output_text || "").trim().replace(/^["']|["']$/g, "");
+
+    if (!sceneDescription) {
+      return res.status(502).json({ message: "Could not describe scene from image" });
+    }
+
+    return res.status(200).json({
+      message: "Scene identified successfully",
+      scene_description: sceneDescription,
+      usage: resp.usage
+    });
+  } catch (error) {
+    console.error("Identify scene error:", error);
+    res.status(500).json({ message: "Server error during Scene identification", error: error.message });
   }
 });
 
@@ -663,29 +724,14 @@ app.post("/medical-check", authMiddleware, upload.single("image"), async (req, r
     console.log("[medical-check] AI advice received:", aiAdvice);
 
     // -----------------------------
-    // Convert advice to audio
+    // Return advice as JSON
     // -----------------------------
-    const ttsResult = await textToSpeech(aiAdvice);
-
-    if (!ttsResult.audio) {
-      return res.status(502).json({
-        message: "Text-to-speech conversion failed",
-        error: ttsResult.error
-      });
-    }
-
-    // -----------------------------
-    // Return audio response
-    // -----------------------------
-    res.set({
-      'Content-Type': 'audio/wav',
-      'Content-Disposition': 'inline; filename=medical_advice.wav',
-      'Content-Length': ttsResult.audio.length,
-      'X-Product-Name': encodeURIComponent(productName),
-      'X-User-Id': userId
+    return res.status(200).json({
+      message: "Medical check completed",
+      product_name: productName,
+      advice: aiAdvice,
+      user_id: userId
     });
-
-    return res.send(ttsResult.audio);
 
   } catch (error) {
     console.error("Medical check error:", error);
@@ -712,29 +758,16 @@ const audioUpload = multer({
   }
 });
 
-app.post("/pi_intent", authMiddleware, audioUpload.single("audio"), async (req, res) => {
+app.post("/pi_intent", authMiddleware, async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ message: "No audio file uploaded", error: "Audio file is required" });
+    const { text } = req.body;
+
+    if (!text || !text.trim()) {
+      return res.status(400).json({ message: "No text provided", error: "text field is required" });
     }
 
-    console.log("[pi_intent] Received audio file:", req.file.originalname, "Size:", req.file.size);
-
-    // 1) Speech-to-text
-    const sttResult = await speechToText(
-      req.file.buffer,
-      req.file.originalname || 'audio.wav',
-      req.file.mimetype || 'audio/wav'
-    );
-
-    if (!sttResult.text) {
-      return res.status(502).json({
-        message: "Speech-to-text failed",
-        error: sttResult.error
-      });
-    }
-
-    const transcribedText = sttResult.text;
+    const transcribedText = text.trim();
+    console.log("[pi_intent] Received text:", transcribedText);
 
     // 2) Identify user intent module
     const detectedModule = await identifyUserIntent(transcribedText);
@@ -765,6 +798,10 @@ app.post("/pi_intent", authMiddleware, audioUpload.single("audio"), async (req, 
         actionCommand = "INITIATE_VIDEO_CALL";
         requiresImage = false;
         break;
+      case "Scene Description Module":
+        actionCommand = "CAPTURE_ENVIRONMENT";
+        requiresImage = true;
+        break
       case "AI Assistance Module":
       default:
         actionCommand = "AI_CONVERSATION";
@@ -772,15 +809,14 @@ app.post("/pi_intent", authMiddleware, audioUpload.single("audio"), async (req, 
         break;
     }
 
-    // 4) Special handling for AI_CONVERSATION - return audio instead of JSON
+    // 4) Special handling for AI_CONVERSATION - generate AI response text
     if (actionCommand === "AI_CONVERSATION") {
       console.log("[pi_intent] AI conversation mode - generating response");
 
-      // Generate AI response using Gemini
       const geminiPrompt = `You are a helpful AI assistant for a visually impaired user.
 The user asked: "${transcribedText}"
 
-Respond in a clear, concise, and conversational manner. Keep your response brief but helpful.
+Respond in a clear, concise, and conversational manner. Keep your response short but helpful.
 Be friendly and supportive.`;
 
       try {
@@ -792,28 +828,15 @@ Be friendly and supportive.`;
         const aiResponse = geminiResponse.text || "I'm here to help. Could you please repeat your question?";
         console.log("[pi_intent] Gemini response:", aiResponse);
 
-        // Convert to audio
-        const ttsResult = await textToSpeech(aiResponse);
-
-        if (!ttsResult.audio) {
-          return res.status(502).json({
-            message: "Text-to-speech failed",
-            error: ttsResult.error
-          });
-        }
-
-        // Return audio with command in headers
-        res.set({
-          'Content-Type': 'audio/wav',
-          'Content-Disposition': 'inline; filename=ai_response.wav',
-          'Content-Length': ttsResult.audio.length,
-          'X-Action-Command': actionCommand,
-          'X-Detected-Module': detectedModule,
-          'X-Transcribed-Text': encodeURIComponent(transcribedText),
-          'X-Requires-Image': 'false'
+        return res.status(200).json({
+          message: "AI conversation response",
+          transcribed_text: transcribedText,
+          detected_module: detectedModule,
+          action_command: actionCommand,
+          ai_response: aiResponse,
+          requires_image: false,
+          user_id: req.user.userId
         });
-
-        return res.send(ttsResult.audio);
 
       } catch (error) {
         console.error("[pi_intent] AI conversation error:", error.message);
@@ -851,88 +874,7 @@ Be friendly and supportive.`;
   }
 })
 
-app.post("/pi_audio", audioUpload.single("audio"), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ message: "No audio file uploaded", error: "Audio file is required" });
-    }
 
-    console.log("[pi_audio] Received audio file:", req.file.originalname, "Size:", req.file.size);
-
-    // 1) Speech-to-text
-    const sttResult = await speechToText(
-      req.file.buffer,
-      req.file.originalname || 'audio.wav',
-      req.file.mimetype || 'audio/wav'
-    );
-
-    if (!sttResult.text) {
-      return res.status(502).json({
-        message: "Speech-to-text failed",
-        error: sttResult.error
-      });
-    }
-
-    const transcribedText = sttResult.text;
-
-    // 2) Identify user intent module
-    const detectedModule = await identifyUserIntent(transcribedText);
-    console.log("[pi_audio] Detected module:", detectedModule);
-
-    // 3) Generate appropriate response based on detected module
-    //     const geminiPrompt = `You are a helpful AI assistant for a visually impaired user.
-    // The user's intent has been identified as: ${detectedModule}
-
-    // Respond to the following user query in a clear, concise, and conversational manner.
-    // Keep your response brief but helpful. Acknowledge what they want to do and guide them appropriately.
-
-    // User said: "${transcribedText}"`;
-
-    //     const geminiResponse = await gemini.models.generateContent({
-    //       model: "gemini-2.5-flash",
-    //       contents: geminiPrompt
-    //     });
-
-    //     const aiResponse = geminiResponse.text || "";
-    //     console.log("[pi_audio] Gemini response:", aiResponse);
-
-    // 4) Text-to-speech
-    const ttsResult = await textToSpeech(detectedModule);
-
-    if (!ttsResult.audio) {
-      return res.status(502).json({
-        message: "Text-to-speech failed",
-        error: ttsResult.error
-      });
-    }
-
-    // 5) Return the audio WAV file with module info in headers
-    res.set({
-      'Content-Type': 'audio/wav',
-      'Content-Disposition': 'inline; filename=response.wav',
-      'Content-Length': ttsResult.audio.length,
-      'X-Detected-Module': detectedModule,
-      'X-Transcribed-Text': encodeURIComponent(transcribedText)
-    });
-
-    return res.send(ttsResult.audio);
-
-  } catch (error) {
-    console.error("[pi_audio] Error:", error.message);
-
-    if (error.code === 'ECONNREFUSED') {
-      return res.status(503).json({
-        message: "FastAPI service unavailable",
-        error: "Could not connect to speech-to-text/TTS service"
-      });
-    }
-
-    return res.status(500).json({
-      message: "Error processing audio",
-      error: error.message
-    });
-  }
-})
 
 
 

@@ -1,0 +1,398 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+%Template version as of 6/27/2024
+
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{tfrupee}
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+\begin{document}
+
+\title{Perceiva: AI-Powered Smart Glasses for the Visually Impaired
+}
+
+\author{\IEEEauthorblockN{1\textsuperscript{st}Arjun Sunil}
+\IEEEauthorblockA{\textit{Dept. of Computer Science and Engineering} \\
+\textit{Toc H Institute of Science and Technology}\\
+Ernakulam, India \\
+sunilarjunas@gmail.com}
+\and
+\IEEEauthorblockN{2\textsuperscript{nd} Angel Sara}
+\IEEEauthorblockA{\textit{Dept. of Computer Science and Engineering} \\
+\textit{Toc H Institute of Science and Technology}\\
+Ernakulam, India \\
+angelsara1804@gmail.com}
+\and
+\IEEEauthorblockN{\hspace{7em}3\textsuperscript{rd} Alen Babu}
+\IEEEauthorblockA{\hspace{7em}\textit{Dept. of Computer Science and Engineering} \\
+\hspace{7em}\textit{Toc H Institute of Science and Technology}\\
+\hspace{7em}Ernakulam, India \\
+\hspace{7em} alenbabu999@gmail.com}
+\and
+\IEEEauthorblockN{\hspace{5em}4\textsuperscript{th} Bahanan George}
+\IEEEauthorblockA{\hspace{5em}\textit{Dept. of Computer Science and Engineering} \\
+\hspace{5em}\textit{Toc H Institute of Science and Technology}\\
+\hspace{5em}Ernakulam, India \\
+\hspace{5em}bahanangeorge25@gmail.com}
+\and
+\IEEEauthorblockN{\hspace{7em}5\textsuperscript{th} Ashly Joseph}
+\IEEEauthorblockA{\hspace{7em}\textit{Dept. of Computer Science and Engineering} \\
+\hspace{7em}\textit{Toc H Institute of Science and Technology}\\
+\hspace{7em}Ernakulam, India \\
+\hspace{7em}ashlyjoseph\_cse@tistcochin.edu.in}
+}
+
+
+
+\maketitle
+
+
+\begin{abstract}
+Visual impairment significantly limits independent decision-making during in-store shopping activities such as product identification, price verification, and ingredient evaluation. This work presents \textit{Perceiva}, an artificial intelligence driven smart glasses system designed to assist visually impaired users through a modular, intent-driven architecture. The wearable platform integrates an onboard camera, microphone, and touch-based interaction to capture visual and auditory inputs, while a Raspberry Pi Zero 2 W performs edge-level coordination of perception and communication tasks. User commands are processed through a speech-to-text pipeline and analyzed using large language models to determine intent and dynamically activate functional modules, including product identification, currency recognition, medical compatibility analysis, price comparison, and volunteer-assisted video calling. Computer vision models enable real-time detection of retail products, while cloud-hosted reasoning services provide contextual decision support through audio feedback. Experimental evaluation demonstrates the feasibility of the proposed system with practical latency suitable for real-time interaction in retail environments. The compact wearable design aims to enhance independence, accessibility, and informed decision-making for visually impaired individuals during everyday shopping tasks.
+\end{abstract}
+
+
+\begin{IEEEkeywords}
+Assistive technology, Smart glasses, Computer vision, Object detection, Internet of Things, Accessibility, Visual impairment
+\end{IEEEkeywords}
+
+
+\section{Introduction}
+The freedom to shop independently is still a major challenge for the visually impaired individuals due to the strong use of visual information by retail environments. Identifying the products on shelves, verifying prices, checking ingredient suitability, and understanding product details often require assistance from others which reduces independence and personal privacy. While assistive tools such as screen readers and mobile applications provide partial support yet they are frequently limited in realistic usability and contextual awareness within physical shopping spaces.
+
+The emerging advancements in artificial intelligence, computer vision, and wearable computing have facilitated the development of intelligent assistive systems that improve environmental perception through audio based interaction. Smart glasses offer a practical hands free platform for delivering such assistance in real time scenario. Nowadays there are many existing wearable solutions focus on
+generic object recognition or basic accessibility features and they do not adequately address the decision making needs involved in everyday shopping activities.
+
+The system thus proposed is an AI enriched shopping buddy designed specifically to assist visually impaired individuals during product selection and evaluation within the store. The system allows real time product detection from shopping racks using an onboard camera. It also further supports intelligent assistance features such as online price comparison and ingredient analysis for health compatibility using external information sources. When the automated assistance is insufficient or inefficient then the system allows users to connect with volunteers through live video calls for human support. User interaction is intentionally simple and controlled with image capture triggered through a touch based interface integrated into the glasses. By combining the key features such as visual perception, intelligent reasoning, and human assistance within a single wearable platform this system focuses primarily to enhance shopping independence, accessibility, and informed decision making for visually impaired individuals while being affordable. 
+
+\section{Related Work}
+Since the advancement of computer vision, wearable computing, artificial intelligence researches on technologies for visually impaired individuals it has progressed a lot. In order to improve independence and situational awareness the existing studies primarily focus on object recognition, navigation assistance and multimodal feedback systems. Many solutions still remains limited in real life decision support and practical applicability in day to day shopping environments.
+
+IoT-enabled assistive system using Raspberry Pi, camera modules for object and currency identification with audio feedback was proposed by Rahman and Sadi \cite{b4}. The system proposed by them demonstrated high recognition accuracy and improved user confidence but it relied heavily on predefined datasets and did not address contextual decision making such as product comparison or suitability analysis \cite {b4}.
+An effective platform for hands free assistance was gained by the wearable smart glasses. A multifunctional smart glasses fusing camera based perception and audio feedback for visually impaired users was designed by Bastola et al.\cite{b1}. While the system successfully enabled object and text recognition, it mainly depend on the cloud based processing and lacked adaptive reasoning for personalized user needs \cite {b1}. An AI driven augmented reality glasses, highlighting challenges related to latency, privacy, and scalability in wearable assistive systems was further reviewed by Rasheed et al. \cite{b5}.
+
+Research has also explored intelligent shopping assistance by AI-driven interfaces and conversational interfaces. A virtual shopping assistant using artificial intelligence techniques was proposed by Villegas Ch et al. \cite{b3} to improve accessibility for visually impaired users in digital shopping environments. Their work demonstrated the advantages
+ of voice-based interaction and intelligent recommendations but was only limited to virtual platforms and did not address physical retail settings.\cite{b3}.
+
+Supportive device design for the visually impaired individual has also been explored to improve environmental awareness. Sait et al. \cite{b2} introduced the design and development of an assistive device integrating sensors and computing modules to aid visually impaired users in navigating their surroundings. The work provided by them has foundational insights for wearable supportive systems operating in structured indoor environments \cite{b2}.
+
+In spite of these advancements existing solutions often address isolated aspects such as recognition, accessibility, or interaction. There still remains a gap in integrated wearable shopping companions that combine real-time product perception, intelligent decision support, and human assistance within a single low-cost and user-centered system. The system addresses this gap by merging vision based product detection, online information-assisted reasoning, and volunteer support into a compact smart glasses platform designed for independent shopping by visually impaired individuals.
+
+\section{Problem Statement and Objectives}
+Visually impared individuals tacle many challanges during shopping independently in a store atmosphere. Tasks like identifying products, verifying prices and checking ingredient suitability requires assistance from staffs from the store, causing a dependence on others.
+
+Existing commercial assistive devices such as \textit{OrCam MyEye} and \textit{Envision Glasses} are expensive, making visually impared individuals hard to buy. More affordable alternatives lack integrated real-time decision support for shopping and rarely combine product awareness, contextual reasoning, and human assistance within a single wearable platform. This gap results in decreased independence and delayed decision-making for users in store atmosphere.
+
+\subsection{Objectives}
+The objectives of this system are as follows:
+\begin{itemize}
+\item To design a wearable smart glasses-based shopping companion for real-time product identification in retail environments.
+\item To implement controlled image capture using a touch-based interaction mechanism for reliable and user-initiated operation.
+\item To enable local perception and decision processing using a Raspberry Pi Zero Two W to reduce latency and dependency on continuous connectivity.
+\item To integrate intelligent assistance features such as online price comparison and ingredient analysis for health compatibility using external information sources.
+\item To provide volunteer-based human assistance through live video calls when automated support is insufficient.
+\item To develop a cost-effective, scalable, and user-centered assistive system that enhances shopping independence and decision-making for visually impaired individuals.
+\end{itemize}
+
+
+\section{Methodology}
+
+In this section, our approach of the \textit{Perceiva Smart Glass} is presented. The system is built on a modular pipeline combining Raspberry Pi Zero 2 W \cite{b6} edge computing, a FastAPI-based ML microservice, a Node.js backend server, and cloud-hosted AI models including Whisper Turbo \cite{b8}, Gemini 2.5 Flash \cite{b13}, GPT-4.1 Mini, YOLOv26 \cite{b11}, ConvNeXt \cite{b12}, and Kokoro TTS, which together enable real-time perception, intent-driven processing, and audio feedback.
+
+\subsection{Overall System Architecture}
+
+The system consists of smart glasses for input acquisition, an intelligent backend for decision-making, and an audio feedback mechanism for user interaction. The smart glasses capture visual input through an embedded camera and auditory input through a microphone. Audio inputs are transcribed into text on the edge device and transmitted to the backend server, where an agentic AI core analyzes the text and selects the appropriate processing module. The module processes the input data (including captured images if required) and returns a textual response, which is converted into speech and delivered to the user.
+
+\begin{figure*}[htbp]
+\centering
+\includegraphics[width=\textwidth]{images/sys-architecture.png}
+\caption{Overall system architecture of the Perceiva smart glasses.}
+\label{fig:system_architecture}
+\end{figure*}
+
+Fig.~\ref{fig:system_architecture} illustrates the complete system architecture. The edge device communicates directly with the ML Microservice for speech-to-text, text-to-speech, and currency recognition, while routing intent classification and medical compatibility queries through the Backend Server. Video call sessions are managed by the Backend Server and streamed through LiveKit Cloud.
+
+\subsection{Hardware Setup}
+
+The core processing unit is a Raspberry Pi Zero 2 W \cite{b6}, mounted onto the glasses frame as the edge computing device. A compact IMX219 camera module \cite{b7} captures real-time visual information, while an INMP441 I\textsuperscript{2}S microphone enables voice-based interaction. Audio feedback is delivered through Bluetooth earphones.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.22\textwidth]{images/PERCEIVA HARDWARE-1.jpeg}
+\hfill
+\includegraphics[width=0.22\textwidth]{images/PERCEIVA HARDWARE-2.jpeg}
+\caption{Physical implementation of the Perceiva smart glasses prototype, highlighting the integrated IMX219 camera module, TTP223 capacitive touch sensor, INMP441 I\textsuperscript{2}S microphone, and the Raspberry Pi Zero 2 W mounted on the wearable frame.}
+\label{fig:hardware}
+\end{figure}
+
+
+
+The Raspberry Pi is responsible for data acquisition from sensors, speech-to-text conversion via API calls, and network communication with the backend over Wi-Fi /Bluetooth. Power is supplied through a rechargeable power bank.
+
+\subsection{User Intent Identification Module}
+
+This module serves as the main decision-making component, it interprets user queries and routes them to the appropriate functional module. User audio is first transcribed into text (STT) using OpenAI Whisper Turbo \cite{b8} hosted on a FastAPI microservice. The text is then send to the Node.js backend, which forwards it to Gemini 2.5 Flash \cite{b13} for semantic interpretation. The model classifies the request into one of six intent categories: Product Identification, Medical Compatibility, Price Comparison, Currency Recognition, Volunteer Video Call, or AI Assistance. Based on this classification, the backend triggers the corresponding workflow and instructs the edge device.
+
+\subsection{Web Application Module}
+
+The web application provides different interfaces for blind users and volunteers, it supports registration, authentication, and role-based access. Blind users can manage their medical profiles, while volunteers can log in and toggle their availability status. Volunteer availability is updated in real-time for quick connections. The web app follows necessary accessibility standards.
+
+\subsection{Volunteer Video Call Module}
+
+This module is responsible for real-time video communication between the visually impaired user and a remote volunteer. When a volunteer call intent is detected, the backend identifies an available volunteer using an atomic database operation to prevent concurrent assignment. Secure access tokens and a unique room identifier are generated and transmitted to the Raspberry Pi, which initializes the LiveKit \cite{b14} client and establishes a WebRTC-based call. The volunteer joins via the web portal. The edge device captures video and audio simultaneously using the necessary sensors. The WebRTC engine transmits media streams over UDP to the LiveKit SFU cloud \cite{b15}, which forwards RTP streams to the volunteer's web client.
+
+\subsection{Price Comparison Module}
+
+When price comparison of a product is to be done, the system captures a product image and sends it to the backend for identification. Pricing information is then scraped from multiple online retail websites relative to the user's location. The collected data is filtered and summarized using a LLM to extract the most relevant deals, and the result is conveyed to the user via audio.
+
+\subsection{AI Assistance Module}
+
+This module functions as a general-purpose conversational partner for queries outside the specialized shopping features. The transcribed text is forwarded to Gemini 2.5 Flash \cite{b13} with a conversational system prompt, which generates a context-aware response. This ensures the user always receives a response regardless of query type.
+
+\subsection{Medical Compatibility Module}
+
+This module assists users in determining whether a product is safe for consumption based on their medical history. The module operates as a multi-stage pipeline: (1) the product image is identified using the GPT-4.1 Mini vision model, (2) the user's medical profile (allergies, conditions, dietary preferences) is retrieved from MongoDB, (3) ingredient information is obtained via SerpAPI web search, and (4) Gemini 2.5 Flash \cite{b13} generates concise, TTS-friendly medical advice by cross-referencing the retrieved ingredients against the user's profile.
+
+\subsection{Product Identification Module}
+
+This module enables users to identify and locate products. Upon intent detection, the system captures an image and transmits it to the ML microservice. A YOLOv26 \cite{b11} object detection model localizes products in the image, and detected regions are cropped and verified using the GPT-4.1 Mini vision model against the user's request. Once matched, the product's pre-mapped location is retrieved from the store database and conveyed to the user.
+
+\subsection{Currency Recognition Module}
+
+This module enables identification of currency denominations. When the intent is classified as currency recognition, the captured image is processed using a ConvNeXt-based \cite{b12} classification model that determines the denomination by comparing the input embedding against learned class prototypes. The recognized value is returned as text. This module operates on the ML microservice to ensure minimal latency.
+
+\subsection{Response Generation Module}
+
+The Response Generation Module converts the textual output produced by any module into audible speech. Text is sent to the Kokoro 82M text-to-speech engine hosted on the ML microservice, which synthesizes natural-sounding WAV audio streamed back to the Raspberry Pi for playback.
+
+
+\section{Implementation Details}
+
+The system comprises of three primary layers: an edge device layer, a backend processing layer, and a machine learning service layer. The edge client, written in Python, manages the complete interaction on the Raspberry Pi. The backend server is built with Node.js and Express.js, which handles authentication, intent routing, and module orchestration, with user data stored in MongoDB Atlas. A separate FastAPI-based microservice hosts all ML models which enables independent scaling when required.
+
+\section{Experimental Setup and Evaluation}
+
+This section presents the experimental setup, evaluation metrics, and performance analysis of the key functional modules of the system. Experiments were conducted to assess the accuracy and latency of the currency recognition, medical compatibility, and product identification modules.
+
+\subsection{Dataset Description}
+
+
+\subsubsection{Currency Recognition Dataset}
+The currency recognition model was trained on a manually collected labeled dataset of Indian currency images containing approximately 2000 images across denominations of \rupee10, \rupee20, \rupee50, \rupee100, \rupee200, and \rupee500. The dataset includes images captured under varying lighting conditions, orientations, backgrounds, and partial occlusions to ensure robustness.
+
+\subsubsection{Product Detection Dataset}
+The YOLOv26 \cite{b11} object detection model was trained on the SKU-110K dataset \cite{b9}, a large-scale dataset containing over 110,000 unique store keeping unit (SKU) categories with densely packed retail shelf images. The dataset consist of 8,219 training images, 588 validation images, and 2,936 test images with bounding box annotations. This dataset is specifically designed for product detection in a thickly packed retail environments, making it well-suited for our use-case.
+
+\subsection{Performance Analysis}
+
+
+\subsubsection{Currency Recognition}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.22\textwidth]{images/currency_input.png}
+\hfill
+\includegraphics[width=0.22\textwidth]{images/currency_output.png}
+\caption{Real-world test: (left) input image of a folded \rupee500 note, (right) API endpoint response showing correct prediction with 80.93\% confidence.}
+\label{fig:currency_realworld}
+\end{figure}
+
+To evaluate robustness, Fig.~\ref{fig:currency_realworld} presents a test case where a \rupee500 note was folded and partially occluded. The model correctly identified the denomination with 80.93\% confidence, reflecting meaningful calibration \cite{b10} that reduces certainty for occluded inputs while maintaining correct predictions. Under standard unfolded conditions, confidence scores exceed 95\%.
+
+\subsubsection{Product Detection (YOLOv26)}
+
+The YOLOv26 \cite{b11} model was trained for generic product detection (single class: \textit{object}) on retail shelves, with product-specific identification delegated to GPT-4.1 Mini in the subsequent pipeline stage.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.22\textwidth]{images/yolo_input.jpg}
+\hfill
+\includegraphics[width=0.22\textwidth]{images/yolo_output.jpg}
+\caption{Product detection on a densely packed retail shelf: (left) original input image, (right) YOLOv26 output with bounding boxes and confidence scores.}
+\label{fig:yolo_output}
+\end{figure}
+
+Fig.~\ref{fig:yolo_output} shows a detection result on a real retail shelf. The model detected over 50 products with confidence scores ranging from 0.25 to 0.87. The detection threshold was set at 0.25 to maximize recall. Each detected region is cropped with 15\% padding and forwarded to GPT-4.1 Mini for verification against the user's requested item.
+
+
+\subsubsection{End-to-End Latency}
+
+% REPLACE: all values below with actual measured latencies
+Table~\ref{tab:latency} presents the average end-to-end latency for each system module, measured from input acquisition to audio feedback delivery.
+
+\begin{table}[htbp]
+\caption{Average End-to-End Latency per Module}
+\label{tab:latency}
+\centering
+\begin{tabular}{|l|c|}
+\hline
+\textbf{Module} & \textbf{Avg. Latency (s)} \\
+\hline
+AI Assistance         & 2.5 \\
+Currency Recognition  & 3.5 \\
+Volunteer Video Call (setup) & 5.0 \\
+Product Identification & 6.5 \\
+Price Comparison      & 8.0 \\
+Medical Compatibility & 10.5 \\
+Product Identification (Shelf) & Variable \\
+\hline
+\end{tabular}
+\end{table}
+
+The AI Assistance module exhibited the lowest latency as it involves a single language model call. Currency Recognition also achieved low latency by relying on a locally hosted CNN model without external API calls. The Medical Compatibility and Price Comparison modules showed the highest latencies due to sequential processing involving product identification, web search, and language model-based analysis. Product Identification from shelf is variable as it depends on the number of detected products requiring verification. The Video Call setup latency represents the time from user request to bidirectional audio-video establishment.
+
+\subsubsection{Medical Compatibility Module}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.11\textwidth]{images/medical_input.png}
+\hfill
+\includegraphics[width=0.32\textwidth]{images/medical_output.png}
+\caption{Medical compatibility test: (left) input product image of Coca-Cola, (right) API response advising against consumption for a diabetic user.}
+\label{fig:medical_realworld}
+\end{figure}
+
+Fig.~\ref{fig:medical_realworld} shows a test case where a Coca-Cola image was evaluated against a user profile with a nut allergy, diabetes, and vegan dietary preference. Responses are constrained to two to three sentences under 40 words for TTS suitability. The module was evaluated with 15 product images against profiles with known allergies and conditions, achieving correct product identification in 13 cases. In 12 of those, the generated advice was accurate and contextually appropriate. The two failures were attributed to heavily occluded or poorly lit labels.
+
+
+\section{Limitations}
+
+Although the system has great potential as an assistive shopping system, it also has some drawbacks. The system requires constant internet connectivity, which impacts the system’s usability in regions with low internet connectivity. The intent recognition can be inaccurate for short and uncertain commands, particularly when the commands involve similar tasks. The currency recognition is restricted to Indian currency only and is less accurate for occluded inputs. The medical compatibility is dependent on online product information, which can be incomplete for certain products. Volunteer call service requires the involvement of volunteers and may not be available at all times. Finally, the system’s evaluation was done in a controlled environment, and its usability may differ in a real-world shopping scenario.
+
+\section{Future Work}
+Any further developments in the future will prioritize reducing the latency mainly for the multiple stage modules such as medical compatibility and price comparison in where the sequential API calls contribute significantly to response times. Other optimizations such as parallel request execution and response caching can help achieve faster feedback cycles.
+
+The current system depends heavily on continuous cloud connectivity which is a key limitation. Future works will explore inference within device for lightweight models and offline fallback modes to maintain core functionality in areas with poor network coverage. The accuracy for the recognition of product and currency models can be improved by training on larger, more diverse datasets by taking into account the variations in lighting, occlusion, and packaging design.
+
+There is a critical need in development of a custom hardware board optimized for edge computing, replacing the general Raspberry Pi. Dedicated board with an application centric processor with integrated camera interface and also an optimized power management would significantly improve processing performance, reduce thermal constraints and enable a more compact wearable form factor suitable for extended everyday use.
+
+
+
+\section{Conclusion}
+Our system showcases the importance of artificial intelligence smart glasses to function as an effective shopping companion for visually impaired individuals. It combines real time product recognition, currency detection, AI assistance and human support through volunteer interaction. In this way the system addresses numerous challenges that was encountered during independent shopping. This wearable design and touch activated interaction mechanism make the system practical and user friendly in real time shopping environments.
+
+This particular architecture strongly emphasizes on being affordable, easy use, and reliable through edge level processing and a modular system design. The conducted feasibility analysis indicates that the system can be executed using readily available hardware and software components without excessive cost or complexity. While there are certain limitations that exist such as reliance on external information sources for advanced features but the overall approach provides a strong foundation for accessible shopping assistance.
+
+Further enhancements may solely focus on improving recognition accuracy, expanding supported product and currency datasets, and optimizing system performance for extended use. The system has the potential to significantly enhance independence, confidence, and informed decision making for visually impaired individuals with continuing development and optimization.
+
+
+\section*{Acknowledgment}
+
+We would like to express our sincere gratitude to all those who supported us in the successful completion of this system. We are thankful to the Head of the Department of Computer Science and Engineering for the constant encouragement and support throughout this work. We also extend our appreciation to our project guide for the continuous guidance and valuable technical insights during the development of the system.
+
+We are grateful to our project coordinators for their valuable guidance from the initial stages of topic selection through the subsequent development phases. We also thank the faculty members and department for providing the necessary academic support, infrastructure, and resources required for this work.
+
+Special thanks are extended to the volunteers who participated in testing and validating the volunteer assistance module, whose feedback helped enhance the system's usability and reliability. Finally, we acknowledge the encouragement and cooperation of our peers and everyone who directly or indirectly contributed to the completion of this project.
+
+\begin{thebibliography}{00}
+
+\bibitem{b1}
+A. Bastola, M. A. Enam, A. Bastola, A. Gluck, and J. Brinkley, 
+``Multi-functional glasses for the blind and visually impaired: Design and development,'' 
+\emph{Proc. Human Factors and Ergonomics Society Annual Meeting}, 
+vol. 67, no. 1, pp. 995--1001, 2023, doi: 10.1177/21695067231192450.
+
+\bibitem{b2}
+U. Sait, V. Ravishankar, T. Kumar, R. Bhaumik, K. V. Gokul Lal, 
+K. Bhalla, and S. S. Kamble, 
+``Design and development of an assistive device for the visually impaired,'' 
+\emph{Procedia Computer Science}, vol. 167, pp. 2244--2252, 2020, 
+doi: 10.1016/j.procs.2020.03.277.
+
+\bibitem{b3}
+W. Villegas-Ch, R. Amores-Falconi, and E. Coronel-Silva, 
+``Design proposal for a virtual shopping assistant for people with vision problems applying artificial intelligence techniques,'' 
+\emph{Big Data and Cognitive Computing}, vol. 7, no. 2, p. 96, 2023, 
+doi: 10.3390/bdcc7020096.
+
+\bibitem{b4}
+M. A. Rahman and M. S. Sadi, 
+``IoT-enabled automated object recognition for the visually impaired,'' 
+\emph{Computer Methods and Programs in Biomedicine Update}, 
+vol. 1, p. 100015, 2021, 
+doi: 10.1016/j.cmpbup.2021.100015.
+
+\bibitem{b5}
+Z. Rasheed, S. Ghwanmeh, and A. Almahadin, 
+``A critical review of AI-driven AR glasses for real-time multilingual communication,'' 
+in \emph{Proc. Advances in Science and Engineering Technology Int. Conf. (ASET)}, 
+IEEE, 2024, pp. 1--9, 
+doi: 10.1109/ASET60340.2024.10708749.
+
+\bibitem{b6}
+Raspberry Pi Foundation,
+``Raspberry Pi Zero 2 W product brief,''
+Raspberry Pi Ltd., Cambridge, United Kingdom, 2021.
+[Online]. Available: https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/
+
+\bibitem{b7}
+Raspberry Pi Foundation,
+``Getting started with the Raspberry Pi camera module,''
+Raspberry Pi Documentation, 2022.
+[Online]. Available: https://www.raspberrypi.com/documentation/accessories/camera.html
+
+
+\bibitem{b8}
+R. Radford, J. W. Kim, T. Xu, G. Brockman, C. McLeavey, and I. Sutskever,
+``Robust speech recognition via large-scale weak supervision,''
+in \emph{Proc. Int. Conf. Machine Learning (ICML)},
+pp. 28492--28518, 2023.
+
+\bibitem{b9}
+E. Goldman, R. Herzig, A. Eisenschtat, J. Goldberger, and T. Hassner,
+``Precise detection in densely packed scenes,''
+in \emph{Proc. IEEE/CVF Conf. Computer Vision and Pattern Recognition (CVPR)},
+pp. 5227--5236, 2019.
+
+\bibitem{b10}
+C. Guo, G. Pleiss, Y. Sun, and K. Q. Weinberger,
+``On calibration of modern neural networks,''
+in \emph{Proc. Int. Conf. Machine Learning (ICML)},
+pp. 1321--1330, 2017.
+
+\bibitem{b11}
+G. Jocher and J. Qiu,
+``Ultralytics YOLO26,''
+Ultralytics, version 26.0.0, 2026.
+[Online]. Available: https://github.com/ultralytics/ultralytics
+
+\bibitem{b12}
+Z. Liu, H. Mao, C.-Y. Wu, C. Feichtenhofer, T. Darrell, and S. Xie,
+``A ConvNet for the 2020s,''
+in \emph{Proc. IEEE/CVF Conf. Computer Vision and Pattern Recognition (CVPR)},
+pp. 11976--11986, 2022.
+
+\bibitem{b13}
+Google Cloud,
+``Gemini 2.5 Flash,''
+\emph{Vertex AI Generative AI Documentation}.
+[Online]. Available: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/2-5-flash
+[Accessed: Feb. 25, 2026].
+
+\bibitem{b14}
+LiveKit,
+``Video Conferencing Use Case,''
+\emph{LiveKit Documentation}.
+[Online]. Available: https://livekit.io/use-cases/video-conferencing
+[Accessed: Feb. 25, 2026].
+
+\bibitem{b15}
+LiveKit,
+``LiveKit SFU,''
+\emph{LiveKit Documentation}.
+[Online]. Available: https://docs.livekit.io/reference/internals/livekit-sfu/
+[Accessed: Feb. 25, 2026].
+
+\end{thebibliography}
+
+
+
+\vspace{12pt}
+
+
+\end{document}

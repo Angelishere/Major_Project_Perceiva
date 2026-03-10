@@ -31,6 +31,7 @@ import requests
 from pathlib import Path
 import asyncio
 import numpy as np
+import threading
 
 try:
     import pyaudio
@@ -65,10 +66,14 @@ except ImportError:
 # =============================================================================
 
 # Server Configuration
-SERVER_URL = "https://major-project-perceiva.onrender.com"
+SERVER_URL = "http://192.168.53.134:4000"
 PI_INTENT_ENDPOINT = f"{SERVER_URL}/pi_intent"
 MEDICAL_CHECK_ENDPOINT = f"{SERVER_URL}/medical-check"
-AUTH_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2OTdhMWM2NzcyMGRhYTliYzBkYjMzZGQiLCJ1c2VybmFtZSI6ImFyanVuIiwicm9sZSI6ImJsaW5kIiwiaWF0IjoxNzcwNjE4MTM4LCJleHAiOjE3NzA2MjE3Mzh9.XFZ3nNoMvUR-OoIXTO5cIqGNVoAhrjeJscbnAmftjI8"
+PRODUCT_IDENTIFICATION_ENDPOINT = f"{SERVER_URL}/identify-product"
+SCENE_DESCRIPTION_ENDPOINT = f"{SERVER_URL}/describe-scene"
+FASTAPI_URL = "https://chanel-confirmed-overprotectively.ngrok-free.dev"  # FastAPI STT/TTS service
+AUTH_TOKEN = None  # Set at runtime via login
+
 # GPIO Configuration
 TOUCH_SENSOR_PIN = 17  # GPIO17 (Pin 11) - TTP223 OUT
 
@@ -89,12 +94,77 @@ PLAYBACK_COMMAND = "paplay"  # PulseAudio playback (routes to Bluetooth A2DP)
 
 # LiveKit Video Call Configuration
 BACKEND_URL = os.environ.get("PERCEIVA_BACKEND_URL", "https://major-project-perceiva.onrender.com")
+LOGIN_ENDPOINT = f"{BACKEND_URL}/login"
 VIDEO_WIDTH = 960
 VIDEO_HEIGHT = 540
 VIDEO_FPS = 24
 LIVEKIT_AUDIO_RATE = 16000
 LIVEKIT_AUDIO_CHANNELS = 2
 LIVEKIT_AUDIO_CHUNK = 320  # 20ms @ 16kHz
+
+# Audio Files (assumed to be in same directory)
+AUDIO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wav")
+
+def play_audio_file(filename: str):
+    """
+    Play local wav sounds reliably.
+
+    Behaviour:
+    - If pacat (video call audio) is active → inject into same stream
+    - Otherwise use paplay normally
+    """
+
+    filepath = os.path.join(AUDIO_DIR, filename)
+
+    if not os.path.exists(filepath):
+        print(f"[Audio] File not found: {filepath}")
+        return
+
+    # If persistent pacat stream exists, use it
+    if audio_player and audio_player.stdin:
+        play_audio_via_pacat(filepath)
+        return
+
+    # Otherwise fallback to paplay
+    cmd = [
+        PLAYBACK_COMMAND,
+        "--latency-msec=50",
+        "--stream-name=perceiva-ui",
+        filepath
+    ]
+
+    try:
+        subprocess.run(cmd, check=False)
+    except Exception as e:
+        print(f"[Audio] Error playing {filename}: {e}")
+
+
+
+
+def play_audio_via_pacat(filepath: str):
+    """
+    Send WAV audio directly into existing pacat stream.
+    Assumes pacat configured as:
+        --rate 48000 --channels 1 --format s16le
+    """
+    global audio_player
+
+    if not audio_player or not audio_player.stdin:
+        print("[Audio] pacat not active, cannot route audio")
+        return
+
+    try:
+        with open(filepath, "rb") as f:
+            data = f.read()
+
+        # Skip standard WAV header (44 bytes)
+        pcm_data = data[44:]
+
+        audio_player.stdin.write(pcm_data)
+        audio_player.stdin.flush()
+
+    except Exception as e:
+        print(f"[Audio] pacat playback error: {e}")
 
 # =============================================================================
 # Audio Recording Functions
@@ -167,6 +237,7 @@ def record_with_touch_trigger(output_path: str) -> bool:
         
         start_time = time.time()
         touch_released_time = None
+        touch_start_played = False
         
         while True:
             elapsed = time.time() - start_time
@@ -184,8 +255,14 @@ def record_with_touch_trigger(output_path: str) -> bool:
                 touch_active = elapsed < 3.0
             
             if touch_active:
+                if not touch_start_played:
+                    play_audio_file("touchnew.wav")
+                    touch_start_played = True
+                
                 touch_released_time = None
             else:
+                touch_start_played = False # Reset for next touch
+                
                 if touch_released_time is None:
                     touch_released_time = time.time()
                 elif time.time() - touch_released_time >= SILENCE_THRESHOLD:
@@ -218,106 +295,114 @@ def record_with_touch_trigger(output_path: str) -> bool:
 # Server Communication
 # =============================================================================
 
-def send_audio_to_server(audio_path: str) -> dict:
+def speech_to_text(audio_path: str) -> str:
     """
-    Send recorded audio to the Node.js server (/pi_intent) and receive intent command.
+    Send audio to FastAPI /stt-upload for speech-to-text conversion.
     
     Args:
         audio_path: Path to the recorded WAV file
     
     Returns:
-        Dict with intent information or audio data:
-        For commands requiring action:
-        {
-            'action_command': str,
-            'detected_module': str,
-            'transcribed_text': str,
-            'requires_image': bool
-        }
-        For AI conversation:
-        {
-            'action_command': 'AI_CONVERSATION',
-            'audio_response': bytes,
-            'detected_module': str,
-            'transcribed_text': str
-        }
-        Returns None on failure
+        Transcribed text string, or None on failure
     """
-    print(f"[Server] Sending audio to {PI_INTENT_ENDPOINT}")
-    
-    if not AUTH_TOKEN:
-        print("[Server] ERROR: No AUTH_TOKEN set. Please set PERCEIVA_AUTH_TOKEN environment variable.")
-        return None
+    stt_url = f"{FASTAPI_URL}/stt-upload"
+    print(f"[STT] Sending audio to {stt_url}")
     
     try:
         with open(audio_path, 'rb') as audio_file:
             files = {
-                'audio': ('recording.wav', audio_file, 'audio/wav')
-            }
-            
-            headers = {
-                'Authorization': f'Bearer {AUTH_TOKEN}'
+                'file': ('recording.wav', audio_file, 'audio/wav')
             }
             
             response = requests.post(
-                PI_INTENT_ENDPOINT,
+                stt_url,
                 files=files,
-                headers=headers,
-                timeout=120  # 2 minute timeout for processing
+                timeout=60
             )
         
         if response.status_code != 200:
-            print(f"[Server] Error: HTTP {response.status_code}")
-            try:
-                error_json = response.json()
-                print(f"[Server] Error details: {error_json}")
-            except:
-                print(f"[Server] Response: {response.text[:200]}")
+            print(f"[STT] Error: HTTP {response.status_code}")
+            print(f"[STT] Response: {response.text[:200]}")
             return None
         
-        # Check if response is audio (AI_CONVERSATION) or JSON (other commands)
-        content_type = response.headers.get('Content-Type', '')
+        result = response.json()
+        text = result.get('text', '').strip()
         
-        if 'audio' in content_type:
-            # Audio response - AI conversation
-            action_command = response.headers.get('X-Action-Command', 'AI_CONVERSATION')
-            detected_module = response.headers.get('X-Detected-Module', 'Unknown')
-            transcribed_text = requests.utils.unquote(
-                response.headers.get('X-Transcribed-Text', '')
-            )
-            
-            print(f"[Server] Success! (Audio Response)")
-            print(f"  - Action Command: {action_command}")
-            print(f"  - Detected Module: {detected_module}")
-            print(f"  - Transcribed: {transcribed_text}")
-            print(f"  - Audio size: {len(response.content)} bytes")
-            
-            return {
-                'action_command': action_command,
-                'audio_response': response.content,
-                'detected_module': detected_module,
-                'transcribed_text': transcribed_text
-            }
-        else:
-            # JSON response - command requiring action
-            intent_data = response.json()
-            
-            print(f"[Server] Success! (JSON Response)")
-            print(f"  - Action Command: {intent_data.get('action_command', 'Unknown')}")
-            print(f"  - Detected Module: {intent_data.get('detected_module', 'Unknown')}")
-            print(f"  - Transcribed: {intent_data.get('transcribed_text', '')}")
-            print(f"  - Requires Image: {intent_data.get('requires_image', False)}")
-            
-            return intent_data
+        if not text:
+            print("[STT] No text returned from STT")
+            return None
+        
+        print(f"[STT] Transcribed: {text}")
+        return text
         
     except requests.exceptions.Timeout:
-        print("[Server] Request timed out")
+        print("[STT] Request timed out")
         return None
     except requests.exceptions.ConnectionError:
-        print(f"[Server] Connection error - is the server running at {SERVER_URL}?")
+        print(f"[STT] Connection error - is FastAPI running at {FASTAPI_URL}?")
         return None
     except Exception as e:
-        print(f"[Server] Exception: {e}")
+        print(f"[STT] Exception: {e}")
+        return None
+
+
+def send_text_to_intent(text: str) -> dict:
+    """
+    Send transcribed text to Node.js /pi_intent endpoint to get intent command.
+    
+    Args:
+        text: Transcribed text from STT
+    
+    Returns:
+        Dict with intent info or audio data, or None on failure
+    """
+    print(f"[Intent] Sending text to {PI_INTENT_ENDPOINT}")
+    
+    if not AUTH_TOKEN:
+        print("[Intent] ERROR: No AUTH_TOKEN set.")
+        return None
+    
+    try:
+        headers = {
+            'Authorization': f'Bearer {AUTH_TOKEN}',
+            'Content-Type': 'application/json'
+        }
+        
+        response = requests.post(
+            PI_INTENT_ENDPOINT,
+            json={'text': text},
+            headers=headers,
+            timeout=120
+        )
+        
+        if response.status_code != 200:
+            print(f"[Intent] Error: HTTP {response.status_code}")
+            try:
+                error_json = response.json()
+                print(f"[Intent] Error details: {error_json}")
+            except:
+                print(f"[Intent] Response: {response.text[:200]}")
+            return None
+        
+        # Parse JSON response
+        intent_data = response.json()
+        
+        print(f"[Intent] Success!")
+        print(f"  - Action Command: {intent_data.get('action_command', 'Unknown')}")
+        print(f"  - Detected Module: {intent_data.get('detected_module', 'Unknown')}")
+        if intent_data.get('ai_response'):
+            print(f"  - AI Response: {intent_data['ai_response'][:100]}...")
+        
+        return intent_data
+        
+    except requests.exceptions.Timeout:
+        print("[Intent] Request timed out")
+        return None
+    except requests.exceptions.ConnectionError:
+        print(f"[Intent] Connection error - is the server running at {SERVER_URL}?")
+        return None
+    except Exception as e:
+        print(f"[Intent] Exception: {e}")
         return None
 
 
@@ -339,8 +424,11 @@ def capture_image(output_path: str) -> bool:
         print("[Camera] Initializing camera...")
         picam = Picamera2()
         
-        # Configure for still image capture
-        config = picam.create_still_configuration()
+        # Configure for still image capture at reduced resolution
+        # 1024x768 is sufficient for product label identification and keeps upload fast
+        config = picam.create_still_configuration(
+            main={"size": (1024, 768)}
+        )
         picam.configure(config)
         
         print("[Camera] Starting camera...")
@@ -349,14 +437,16 @@ def capture_image(output_path: str) -> bool:
         # Allow camera to warm up
         time.sleep(2)
         
+        play_audio_file("shutternew.wav")
         print(f"[Camera] Capturing image to {output_path}...")
         picam.capture_file(output_path)
         
         picam.stop()
         picam.close()
         
-        print("[Camera] Image captured successfully")
-        return os.path.exists(output_path) and os.path.getsize(output_path) > 0
+        file_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+        print(f"[Camera] Image captured successfully ({file_size / 1024:.0f} KB)")
+        return file_size > 0
         
     except Exception as e:
         print(f"[Camera] Exception: {e}")
@@ -365,66 +455,114 @@ def capture_image(output_path: str) -> bool:
 
 def send_image_to_medical_check(image_path: str) -> bytes:
     """
-    Send image to /medical-check endpoint and receive audio advice.
-    
+    Send image to /medical-check endpoint and receive advice as text,
+    then convert to audio via FastAPI TTS.
+
     Args:
         image_path: Path to the image file
-    
+
     Returns:
         Audio bytes (WAV) or None on failure
     """
-    print(f"[MedicalCheck] Sending image to {MEDICAL_CHECK_ENDPOINT}")
-    
     if not AUTH_TOKEN:
         print("[MedicalCheck] ERROR: No AUTH_TOKEN set")
         return None
-    
+
+    # Debug file size
     try:
-        with open(image_path, 'rb') as image_file:
-            files = {
-                'image': ('product.jpg', image_file, 'image/jpeg')
-            }
-            
-            headers = {
-                'Authorization': f'Bearer {AUTH_TOKEN}'
-            }
-            
-            response = requests.post(
-                MEDICAL_CHECK_ENDPOINT,
-                files=files,
-                headers=headers,
-                timeout=120  # 2 minute timeout
+        file_size = os.path.getsize(image_path)
+        print(f"[MedicalCheck] Image size: {file_size / 1024:.0f} KB")
+    except:
+        pass
+
+    headers = {
+        "Authorization": f"Bearer {AUTH_TOKEN}"
+    }
+
+    MAX_RETRIES = 2
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            print(f"[MedicalCheck] Sending to {MEDICAL_CHECK_ENDPOINT} (attempt {attempt}/{MAX_RETRIES})")
+
+            # STREAM FILE like currency recognition endpoint
+            with open(image_path, "rb") as img_file:
+
+                files = {
+                    "image": ("product.jpg", img_file, "image/jpeg")
+                }
+
+                response = requests.post(
+                    MEDICAL_CHECK_ENDPOINT,
+                    files=files,
+                    headers=headers,
+                    timeout=(20, 180)  # longer connect timeout for Pi
+                )
+
+            # Retry only on 502
+            if response.status_code == 502 and attempt < MAX_RETRIES:
+                print("[MedicalCheck] Got 502, retrying in 3s...")
+                time.sleep(3)
+                continue
+
+            if response.status_code != 200:
+                print(f"[MedicalCheck] Error: HTTP {response.status_code}")
+                try:
+                    print(f"[MedicalCheck] Error details: {response.json()}")
+                except:
+                    print(f"[MedicalCheck] Response: {response.text[:200]}")
+                return None
+
+            # Parse response JSON
+            result = response.json()
+            product_name = result.get("product_name", "Unknown")
+            advice = result.get("advice", "")
+
+            print("[MedicalCheck] Success!")
+            print(f"  - Product Name: {product_name}")
+            print(f"  - Advice: {advice[:100]}...")
+
+            if not advice:
+                print("[MedicalCheck] No advice received")
+                return None
+
+            # Convert advice to audio
+            TTS_API = f"{FASTAPI_URL}/tts"
+            print("[MedicalCheck] Converting advice to audio...")
+
+            tts_response = requests.post(
+                TTS_API,
+                json={"text": advice},
+                timeout=30
             )
-        
-        if response.status_code != 200:
-            print(f"[MedicalCheck] Error: HTTP {response.status_code}")
-            try:
-                error_json = response.json()
-                print(f"[MedicalCheck] Error details: {error_json}")
-            except:
-                print(f"[MedicalCheck] Response: {response.text[:200]}")
+
+            if tts_response.status_code != 200:
+                print(f"[MedicalCheck] TTS failed: HTTP {tts_response.status_code}")
+                return None
+
+            print(f"[MedicalCheck] TTS audio received: {len(tts_response.content)} bytes")
+            return tts_response.content
+
+        except requests.exceptions.Timeout:
+            print(f"[MedicalCheck] Timeout on attempt {attempt}")
+            if attempt < MAX_RETRIES:
+                time.sleep(3)
+                continue
             return None
-        
-        # Extract product info from headers
-        product_name = requests.utils.unquote(
-            response.headers.get('X-Product-Name', 'Unknown')
-        )
-        
-        print(f"[MedicalCheck] Success!")
-        print(f"  - Product Name: {product_name}")
-        print(f"  - Audio size: {len(response.content)} bytes")
-        
-        return response.content
-        
-    except requests.exceptions.Timeout:
-        print("[MedicalCheck] Request timed out")
-        return None
-    except requests.exceptions.ConnectionError:
-        print(f"[MedicalCheck] Connection error - is the server running?")
-        return None
-    except Exception as e:
-        print(f"[MedicalCheck] Exception: {e}")
-        return None
+
+        except requests.exceptions.ConnectionError as e:
+            print(f"[MedicalCheck] Connection error on attempt {attempt}: {e}")
+            if attempt < MAX_RETRIES:
+                time.sleep(3)
+                continue
+            return None
+
+        except Exception as e:
+            print(f"[MedicalCheck] Exception: {e}")
+            return None
+
+    return None
+
 
 
 def send_image_to_currency_recognition(image_path: str) -> bytes:
@@ -479,37 +617,227 @@ def send_image_to_currency_recognition(image_path: str) -> bytes:
         print(f"[CurrencyRecognition] Detected currency: ₹{prediction}")
         print(f"[CurrencyRecognition] Confidence: {confidence:.2%}")
         
-        # Step 2: Generate TTS response
-        tts_text = f"This is a {prediction} rupee note."
-        print(f"[CurrencyRecognition] Generating TTS: {tts_text}")
+        print(f"[CurrencyRecognition] Detected currency: ₹{prediction}")
+        print(f"[CurrencyRecognition] Confidence: {confidence:.2%}")
         
-        tts_response = requests.post(
-            TTS_API,
-            json={"text": tts_text},
-            timeout=30
-        )
+        # Step 2: Play local audio file for currency
+        # Expected files: "10.wav", "20.wav", "50.wav", "100.wav", "200.wav", "500.wav"
+        currency_audio_file = f"{prediction}.wav"
         
-        if tts_response.status_code != 200:
-            print(f"[CurrencyRecognition] TTS Error: HTTP {tts_response.status_code}")
-            return None
+        print(f"[CurrencyRecognition] Playing local audio: {currency_audio_file}")
+        play_audio_file(currency_audio_file)
         
-        print(f"[CurrencyRecognition] TTS audio received: {len(tts_response.content)} bytes")
-        
-        return tts_response.content
+        # Return dummy bytes to signal success (since we handled playback locally)
+        return b"LOCAL_PLAYBACK_DONE"
         
     except requests.exceptions.Timeout:
         print("[CurrencyRecognition] Request timed out")
+        play_audio_file("Interaction_fail.wav")
         return None
     except requests.exceptions.ConnectionError:
         print("[CurrencyRecognition] Connection error - is the ngrok tunnel running?")
+        play_audio_file("Interaction_fail.wav")
+        return None
+    except Exception as e:
+        print(f"[CurrencyRecognition] Exception: {e}")
+        play_audio_file("Interaction_fail.wav")
         return None
     except Exception as e:
         print(f"[CurrencyRecognition] Exception: {e}")
         return None
 
 
+def send_image_to_find_product(image_path: str, query_text: str) -> bytes:
+    """
+    Send image and query to /find-product and get TTS audio response.
+    """
+    if not AUTH_TOKEN:
+        print("[FindProduct] ERROR: No AUTH_TOKEN set")
+        return None
+        
+    endpoint = f"{SERVER_URL}/find-product"
+    print(f"[FindProduct] Sending to {endpoint} with query: '{query_text}'")
+    
+    try:
+        with open(image_path, 'rb') as img_file:
+            files = {'image': ('scene.jpg', img_file, 'image/jpeg')}
+            data = {'query': query_text}
+            headers = {'Authorization': f'Bearer {AUTH_TOKEN}'}
+            
+            response = requests.post(endpoint, files=files, data=data, headers=headers, timeout=60)
+            
+        if response.status_code != 200:
+            print(f"[FindProduct] Error: HTTP {response.status_code}")
+            return None
+            
+        result = response.json()
+        guidance = result.get('guidance', '')
+        print(f"[FindProduct] Guidance: {guidance}")
+        
+        # If guidance is empty, maybe play a generic fail message?
+        if not guidance:
+            print("[FindProduct] No guidance returned")
+            return None
+            
+        # TTS
+        tts_url = f"{FASTAPI_URL}/tts"
+        tts_resp = requests.post(tts_url, json={'text': guidance}, timeout=30)
+        
+        if tts_resp.status_code != 200:
+            print(f"[FindProduct] TTS failed: {tts_resp.status_code}")
+            return None
+            
+        return tts_resp.content
+        
+    except Exception as e:
+        print(f"[FindProduct] Exception: {e}")
+        return None
+
+
+def send_image_to_product_identification(image_path: str) -> bytes:
+    """
+    Send image to /identify-product endpoint and receive product name as text,
+    then convert to audio via FastAPI TTS.
+
+    Args:
+        image_path: Path to the image file
+
+    Returns:
+        Audio bytes (WAV) or None on failure
+    """
+    if not AUTH_TOKEN:
+        print("[ProductID] ERROR: No AUTH_TOKEN set")
+        return None
+
+    print(f"[ProductID] Processing image: {image_path}")
+
+    try:
+        with open(image_path, "rb") as img_file:
+            files = {
+                "image": ("product.jpg", img_file, "image/jpeg")
+            }
+            
+            print("[ProductID] Sending to server...")
+            response = requests.post(
+                PRODUCT_IDENTIFICATION_ENDPOINT,
+                files=files,
+                timeout=30
+            )
+
+            if response.status_code != 200:
+                print(f"[ProductID] Error: HTTP {response.status_code}")
+                try:
+                    print(f"[ProductID] Error details: {response.json()}")
+                except:
+                    print(f"[ProductID] Response: {response.text[:200]}")
+                return None
+
+            # Parse response JSON
+            result = response.json()
+            product_name = result.get("product_name", "")
+            
+            print("[ProductID] Success!")
+            print(f"  - Product Name: {product_name}")
+
+            if not product_name:
+                print("[ProductID] No product name received")
+                return None
+
+            # Convert to audio
+            TTS_API = f"{FASTAPI_URL}/tts"
+            print("[ProductID] Converting result to audio...")
+
+            tts_response = requests.post(
+                TTS_API,
+                json={"text": product_name},
+                timeout=30
+            )
+
+            if tts_response.status_code != 200:
+                print(f"[ProductID] TTS failed: HTTP {tts_response.status_code}")
+                return None
+
+            print(f"[ProductID] TTS audio received: {len(tts_response.content)} bytes")
+            return tts_response.content
+
+    except Exception as e:
+        print(f"[ProductID] Exception: {e}")
+        return None
+
+
+def send_image_to_scene_description(image_path: str) -> bytes:
+    """
+    Send image to /describe-scene endpoint and receive scene description,
+    then convert to audio via FastAPI TTS.
+
+    Args:
+        image_path: Path to the image file
+
+    Returns:
+        Audio bytes (WAV) or None on failure
+    """
+    if not AUTH_TOKEN:
+        print("[SceneDesc] ERROR: No AUTH_TOKEN set")
+        return None
+
+    print(f"[SceneDesc] Processing image: {image_path}")
+
+    try:
+        with open(image_path, "rb") as img_file:
+            files = {
+                "image": ("scene.jpg", img_file, "image/jpeg")
+            }
+            
+            print("[SceneDesc] Sending to server...")
+            response = requests.post(
+                SCENE_DESCRIPTION_ENDPOINT,
+                files=files,
+                timeout=30
+            )
+
+            if response.status_code != 200:
+                print(f"[SceneDesc] Error: HTTP {response.status_code}")
+                try:
+                    print(f"[SceneDesc] Error details: {response.json()}")
+                except:
+                    print(f"[SceneDesc] Response: {response.text[:200]}")
+                return None
+
+            # Parse response JSON
+            result = response.json()
+            scene_description = result.get("scene_description", "")
+            
+            print("[SceneDesc] Success!")
+            print(f"  - Description: {scene_description[:100]}...")
+
+            if not scene_description:
+                print("[SceneDesc] No description received")
+                return None
+
+            # Convert to audio
+            TTS_API = f"{FASTAPI_URL}/tts"
+            print("[SceneDesc] Converting result to audio...")
+
+            tts_response = requests.post(
+                TTS_API,
+                json={"text": scene_description},
+                timeout=30
+            )
+
+            if tts_response.status_code != 200:
+                print(f"[SceneDesc] TTS failed: HTTP {tts_response.status_code}")
+                return None
+
+            print(f"[SceneDesc] TTS audio received: {len(tts_response.content)} bytes")
+            return tts_response.content
+
+    except Exception as e:
+        print(f"[SceneDesc] Exception: {e}")
+        return None
+
+
 # =============================================================================
-# LiveKit Video Call Functions
+# Video Call Functions
 # =============================================================================
 
 # Global audio player for remote audio
@@ -623,6 +951,8 @@ async def initiate_video_call():
     try:
         # ===== Request volunteer =====
         print("[VideoCall] Requesting volunteer...")
+        play_audio_file("Calling.wav")
+        
         resp = requests.post(
             f"{BACKEND_URL}/api/call/request-volunteer",
             headers=headers,
@@ -632,11 +962,48 @@ async def initiate_video_call():
         
         if not data.get("success"):
             print("❌ [VideoCall] No volunteers available")
+            play_audio_file("Interaction_fail.wav")
             return False
         
         room_id = data["roomID"]
         volunteer = data["volunteer"]
         print(f"✅ [VideoCall] Volunteer: {volunteer['username']}")
+
+        # ===== Wait for volunteer to answer =====
+        print("[VideoCall] Waiting for volunteer to answer...")
+        answered = False
+        wait_start = time.time()
+        ANSWER_TIMEOUT_SEC = 60
+
+        while time.time() - wait_start < ANSWER_TIMEOUT_SEC:
+            try:
+                status_resp = requests.get(
+                    f"{BACKEND_URL}/api/call/status",
+                    params={"roomID": room_id},
+                    headers=headers,
+                    timeout=5,
+                )
+
+                if status_resp.status_code == 200:
+                    status = status_resp.json().get("status")
+                    if status == "active":
+                        answered = True
+                        break
+                elif status_resp.status_code == 404:
+                    # Rejected/ended before answering
+                    print("[VideoCall] Call ended before answer")
+                    play_audio_file("Interaction_fail.wav")
+                    return False
+            except Exception:
+                # Temporary network hiccup; keep polling
+                pass
+
+            await asyncio.sleep(1)
+
+        if not answered:
+            print("[VideoCall] Timeout waiting for answer")
+            play_audio_file("Interaction_fail.wav")
+            return False
         
         # ===== Get LiveKit token =====
         print("[VideoCall] Getting LiveKit room token...")
@@ -670,6 +1037,7 @@ async def initiate_video_call():
         print("🔗 [VideoCall] Connecting to LiveKit...")
         await room.connect(livekit_url, token)
         print("✅ [VideoCall] Connected")
+        play_audio_file("Call_accepted.wav")
         
         # Start Bluetooth audio player
         start_bluetooth_player()
@@ -711,7 +1079,24 @@ async def initiate_video_call():
         # ===== Main video loop =====
         print("[VideoCall] Call active. Touch sensor to end call.")
         call_active = True
-        last_touch_check = time.time()
+        end_call_event = threading.Event()
+
+        # Prefer edge detection so brief touches reliably end the call
+        if GPIO:
+            try:
+                def _end_call_cb(_channel):
+                    if not end_call_event.is_set():
+                        print("[VideoCall] Touch detected (event) - ending call...")
+                        end_call_event.set()
+
+                GPIO.add_event_detect(
+                    TOUCH_SENSOR_PIN,
+                    GPIO.RISING,
+                    callback=_end_call_cb,
+                    bouncetime=250,
+                )
+            except Exception as e:
+                print(f"[VideoCall] GPIO event detect setup failed: {e}")
         
         try:
             while call_active:
@@ -727,16 +1112,23 @@ async def initiate_video_call():
                     )
                 )
                 
-                # Check touch sensor every 100ms to end call
-                if time.time() - last_touch_check >= 0.1:
-                    if GPIO:
-                        # Real hardware: check GPIO pin
+                # End call requested via touch
+                if end_call_event.is_set():
+                    await asyncio.sleep(0.05)
+                    call_active = False
+                    continue
+
+                # Fallback polling (in case edge detection isn't available)
+                if GPIO and not end_call_event.is_set():
+                    try:
                         if GPIO.input(TOUCH_SENSOR_PIN) == GPIO.HIGH:
-                            print("[VideoCall] Touch detected - ending call...")
-                            time.sleep(0.3)  # Debounce
+                            print("[VideoCall] Touch detected (poll) - ending call...")
+                            await asyncio.sleep(0.2)  # Debounce (non-blocking)
                             call_active = False
-                    # In simulation mode, call continues until Ctrl+C
-                    last_touch_check = time.time()
+                    except Exception:
+                        pass
+                
+                # In simulation mode, call continues until Ctrl+C (or add a key listener if needed)
                 
                 await asyncio.sleep(1 / VIDEO_FPS)
                 
@@ -753,6 +1145,12 @@ async def initiate_video_call():
     finally:
         # Cleanup
         print("[VideoCall] Cleaning up...")
+
+        if GPIO:
+            try:
+                GPIO.remove_event_detect(TOUCH_SENSOR_PIN)
+            except Exception:
+                pass
         
         # Stop audio player
         if audio_player:
@@ -766,6 +1164,8 @@ async def initiate_video_call():
             except:
                 audio_player.kill()
             audio_player = None
+            
+        play_audio_file("Call_Ended.wav")
         
         # End call on backend
         if room_id:
@@ -969,11 +1369,18 @@ def process_single_interaction():
             print("[Workflow] Recording too short, ignoring")
             return False
         
-        # Step 2: Send audio to /pi_intent
-        intent_data = send_audio_to_server(recording_path)
+        # Step 2: Speech-to-text via FastAPI
+        transcribed_text = speech_to_text(recording_path)
+        
+        if transcribed_text is None:
+            print("[Workflow] Speech-to-text failed")
+            return False
+        
+        # Step 3: Send text to /pi_intent for intent detection
+        intent_data = send_text_to_intent(transcribed_text)
         
         if intent_data is None:
-            print("[Workflow] Server communication failed")
+            print("[Workflow] Intent detection failed")
             return False
         
         action_command = intent_data.get('action_command', '')
@@ -981,7 +1388,49 @@ def process_single_interaction():
         # Step 3: Handle command-specific actions
         audio_response = None
         
-        if action_command == "CAPTURE_MEDICAL_IMAGE":
+        if action_command == "CAPTURE_PRODUCT_IMAGE":
+            print("[Workflow] Product identification requested")
+            
+            # Create temp file for image
+            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_img:
+                image_path = tmp_img.name
+            
+            # Capture image
+            print("[Workflow] Capturing product image...")
+            if not capture_image(image_path):
+                print("[Workflow] Image capture failed")
+                return False
+            
+            # Send image to identify-product endpoint
+            print("[Workflow] Sending image for identification...")
+            audio_response = send_image_to_product_identification(image_path)
+            
+            if audio_response is None:
+                print("[Workflow] Product identification failed")
+                return False
+
+        elif action_command == "CAPTURE_ENVIRONMENT":
+            print("[Workflow] Scene description requested")
+            
+            # Create temp file for image
+            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_img:
+                image_path = tmp_img.name
+            
+            # Capture image
+            print("[Workflow] Capturing scene image...")
+            if not capture_image(image_path):
+                print("[Workflow] Image capture failed")
+                return False
+            
+            # Send image to describe-scene endpoint
+            print("[Workflow] Sending image for scene description...")
+            audio_response = send_image_to_scene_description(image_path)
+            
+            if audio_response is None:
+                print("[Workflow] Scene description failed")
+                return False
+
+        elif action_command == "CAPTURE_MEDICAL_IMAGE":
             print("[Workflow] Medical compatibility check requested")
             
             # Create temp file for image
@@ -1023,6 +1472,28 @@ def process_single_interaction():
                 print("[Workflow] Currency recognition failed")
                 return False
         
+        elif action_command == "CAPTURE_SHELF_IMAGE":
+            print("[Workflow] Product finding requested")
+            
+            # Create temp file for image
+            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_img:
+                image_path = tmp_img.name
+            
+            # Capture image
+            print("[Workflow] Capturing shelf image...")
+            if not capture_image(image_path):
+                print("[Workflow] Image capture failed")
+                return False
+            
+            # Send image + text to find-product
+            print("[Workflow] Sending image for analysis...")
+            query_text = transcribed_text
+            audio_response = send_image_to_find_product(image_path, query_text)
+            
+            if audio_response is None:
+                print("[Workflow] Product finding failed")
+                return False
+
         elif action_command == "INITIATE_VIDEO_CALL":
             print("[Workflow] Video call requested")
             
@@ -1044,24 +1515,36 @@ def process_single_interaction():
         elif action_command == "AI_CONVERSATION":
             print("[Workflow] AI conversation detected")
             
-            # Audio response is already in the intent_data
-            audio_response = intent_data.get('audio_response')
+            # Get AI response text from server
+            ai_response_text = intent_data.get('ai_response')
             
-            if audio_response is None:
-                print("[Workflow] No audio response received")
+            if not ai_response_text:
+                print("[Workflow] No AI response text received")
                 return False
             
-            # Play the AI response audio
-            print("[Workflow] Playing AI response...")
-            success = play_audio_pulseaudio(audio_response)
+            print(f"[Workflow] AI response: {ai_response_text}")
             
-            if not success:
-                print("[Workflow] Audio playback failed")
+            # Convert to audio via FastAPI TTS
+            TTS_API = f"{FASTAPI_URL}/tts"
+            print("[Workflow] Converting AI response to audio...")
+            
+            try:
+                tts_response = requests.post(
+                    TTS_API,
+                    json={"text": ai_response_text},
+                    timeout=30
+                )
+                
+                if tts_response.status_code != 200:
+                    print(f"[Workflow] TTS failed: HTTP {tts_response.status_code}")
+                    return False
+                
+                audio_response = tts_response.content
+                print(f"[Workflow] TTS audio received: {len(audio_response)} bytes")
+                
+            except Exception as e:
+                print(f"[Workflow] TTS error: {e}")
                 return False
-            
-            # Return to normal mode
-            print("[Workflow] AI conversation complete")
-            return True
         
         else:
             # For other commands, we would handle them here
@@ -1094,6 +1577,49 @@ def process_single_interaction():
                 pass
 
 
+def login():
+    """Prompt for credentials and authenticate with the server."""
+    global AUTH_TOKEN
+    
+    print("\n[Login] Please enter your credentials")
+    username = input("  Username: ").strip()
+    password = input("  Password: ").strip()
+    
+    if not username or not password:
+        print("[Login] Username and password are required")
+        return False
+    
+    try:
+        print(f"[Login] Authenticating as '{username}'...")
+        response = requests.post(
+            LOGIN_ENDPOINT,
+            json={"username": username, "password": password},
+            timeout=15
+        )
+        
+        if response.status_code != 200:
+            print(f"[Login] Failed: HTTP {response.status_code}")
+            try:
+                print(f"[Login] {response.json().get('message', '')}")
+            except:
+                pass
+            return False
+        
+        data = response.json()
+        AUTH_TOKEN = data.get('token')
+        user = data.get('user', {})
+        
+        print(f"[Login] ✅ Logged in as {user.get('username', username)} ({user.get('role', 'unknown')})")
+        return True
+        
+    except requests.exceptions.ConnectionError:
+        print(f"[Login] Connection error - is the server running at {SERVER_URL}?")
+        return False
+    except Exception as e:
+        print(f"[Login] Error: {e}")
+        return False
+
+
 def main():
     """Main entry point - runs the touch-triggered loop."""
     print("=" * 60)
@@ -1103,6 +1629,11 @@ def main():
     print(f"Audio Device: {AUDIO_DEVICE}")
     print(f"Touch Sensor: GPIO{TOUCH_SENSOR_PIN}")
     print("-" * 60)
+    
+    # Login
+    if not login():
+        print("[Main] Login failed. Exiting.")
+        return
     
     # Setup
     setup_gpio()

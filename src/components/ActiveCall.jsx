@@ -8,6 +8,7 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
   const [remoteParticipant, setRemoteParticipant] = useState(null);
   const [logs, setLogs] = useState([]);
   const [myUserID, setMyUserID] = useState(null);
+  const [waitingForAnswer, setWaitingForAnswer] = useState(true);
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
@@ -19,7 +20,38 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
   }
 
   useEffect(() => {
-    initCall();
+    let cancelled = false;
+
+    (async () => {
+      // Wait until the server marks the call as active (callee answered)
+      setWaitingForAnswer(true);
+      while (!cancelled) {
+        try {
+          const statusRes = await api.get("/api/call/status", { params: { roomID } });
+          const status = statusRes?.data?.status;
+          if (status === "active") break;
+        } catch (e) {
+          const httpStatus = e?.response?.status;
+          if (httpStatus === 404) {
+            log("Call ended before answer");
+            onEndCall();
+            return;
+          }
+          if (httpStatus === 403) {
+            log("Not authorized for this call");
+            onEndCall();
+            return;
+          }
+          // Transient error; keep polling
+        }
+
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+
+      if (cancelled) return;
+      setWaitingForAnswer(false);
+      initCall();
+    })();
 
     // Handle tab close / browser navigation
     const handleBeforeUnload = (e) => {
@@ -31,6 +63,7 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
     window.addEventListener('beforeunload', handleBeforeUnload);
 
     return () => {
+      cancelled = true;
       window.removeEventListener('beforeunload', handleBeforeUnload);
       cleanup();
     };
@@ -206,6 +239,12 @@ export default function ActiveCall({ targetUser, roomID, onEndCall }) {
   return (
     <div style={{ padding: 20, maxWidth: 1000, margin: "0 auto" }}>
       <h2>Call with {targetUser?.username}</h2>
+
+      {waitingForAnswer && (
+        <div style={{ margin: "8px 0 16px", color: "#666" }}>
+          Ringing… waiting for the other user to answer.
+        </div>
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
         {/* Local Video */}
