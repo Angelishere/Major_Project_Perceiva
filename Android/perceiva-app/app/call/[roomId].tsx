@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useCallback } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import {
     View,
     Text,
@@ -7,7 +7,6 @@ import {
     StyleSheet,
     ActivityIndicator,
     AppState,
-    Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, router, Href } from "expo-router";
@@ -16,7 +15,6 @@ import {
     RoomEvent,
     Track,
     VideoPresets,
-    ConnectionState,
 } from "livekit-client";
 import { VideoView, AudioSession } from "@livekit/react-native";
 import api from "../../api/api";
@@ -37,22 +35,18 @@ export default function CallScreen() {
     const [localTrack, setLocalTrack] = useState<any>(null);
     const [remoteTracks, setRemoteTracks] = useState<TrackInfo[]>([]);
     const [muted, setMuted] = useState(false);
-    const [logs, setLogs] = useState<string[]>([]);
 
     const roomRef = useRef<Room | null>(null);
     const cancelledRef = useRef(false);
 
     function log(msg: string) {
         console.log(`[Call] ${msg}`);
-        setLogs((prev) => [`${new Date().toLocaleTimeString()} - ${msg}`, ...prev].slice(0, 30));
     }
 
-    // ─── Poll for call status then connect ────────────────────
     useEffect(() => {
         cancelledRef.current = false;
 
         (async () => {
-            // Poll until the call is active (callee answered)
             log("Waiting for call to be answered...");
             while (!cancelledRef.current) {
                 try {
@@ -62,13 +56,7 @@ export default function CallScreen() {
                     if (statusRes?.data?.status === "active") break;
                 } catch (e: any) {
                     const httpStatus = e?.response?.status;
-                    if (httpStatus === 404) {
-                        log("Call ended before answer");
-                        handleCallEnded();
-                        return;
-                    }
-                    if (httpStatus === 403) {
-                        log("Not authorized for this call");
+                    if (httpStatus === 404 || httpStatus === 403) {
                         handleCallEnded();
                         return;
                     }
@@ -78,7 +66,6 @@ export default function CallScreen() {
 
             if (cancelledRef.current) return;
             setStatus("connecting");
-            log("Call answered! Connecting...");
             await initCall();
         })();
 
@@ -88,28 +75,20 @@ export default function CallScreen() {
         };
     }, []);
 
-    // ─── Handle app going to background ───────────────────────
     useEffect(() => {
         const subscription = AppState.addEventListener("change", (nextAppState) => {
             if (nextAppState === "background" || nextAppState === "inactive") {
-                // Keep connection alive but could mute camera to save battery
-                if (roomRef.current?.localParticipant) {
-                    roomRef.current.localParticipant.setCameraEnabled(false);
-                }
+                roomRef.current?.localParticipant?.setCameraEnabled(false);
             } else if (nextAppState === "active") {
-                if (roomRef.current?.localParticipant) {
-                    roomRef.current.localParticipant.setCameraEnabled(true);
-                }
+                roomRef.current?.localParticipant?.setCameraEnabled(true);
             }
         });
 
         return () => subscription.remove();
     }, []);
 
-    // ─── Initialize LiveKit call ──────────────────────────────
     async function initCall() {
         try {
-            // Route audio to loudspeaker instead of earpiece
             await AudioSession.configureAudio({
                 android: {
                     preferredOutputList: ["speaker"],
@@ -121,15 +100,12 @@ export default function CallScreen() {
             });
             await AudioSession.startAudioSession();
 
-            // Get LiveKit token from backend
             const res = await api.post("/api/call/get-room", {
                 targetUserId: targetUserId,
             });
 
             const { livekitUrl, token } = res.data;
-            log(`Got LiveKit token. Connecting to ${livekitUrl}...`);
 
-            // Create room
             const newRoom = new Room({
                 adaptiveStream: true,
                 dynacast: true,
@@ -137,27 +113,20 @@ export default function CallScreen() {
                     resolution: VideoPresets.h720.resolution,
                 },
             });
+
             roomRef.current = newRoom;
 
-            // Setup event listeners BEFORE connecting
             setupRoomListeners(newRoom);
 
-            // Connect
             await newRoom.connect(livekitUrl, token);
-            log("Connected to LiveKit room");
 
-            // Enable camera and microphone
             await newRoom.localParticipant.enableCameraAndMicrophone();
-            log("Camera and microphone enabled");
 
-            // Get local video track
             const localVideoPub = newRoom.localParticipant.getTrackPublication(Track.Source.Camera);
             if (localVideoPub?.track) {
                 setLocalTrack(localVideoPub.track);
-                log("✅ Local video track ready");
             }
 
-            // Check for existing remote participants
             newRoom.remoteParticipants.forEach((participant) => {
                 participant.trackPublications.forEach((pub) => {
                     if (pub.track && pub.track.kind === "video") {
@@ -168,8 +137,6 @@ export default function CallScreen() {
 
             setStatus("connected");
         } catch (error: any) {
-            log("Call init failed: " + error.message);
-            console.error("initCall error:", error);
             Alert.alert("Connection Failed", "Could not connect to the call.", [
                 { text: "Go Back", onPress: handleCallEnded },
             ]);
@@ -178,14 +145,13 @@ export default function CallScreen() {
 
     function addRemoteTrack(track: any, identity: string) {
         setRemoteTracks((prev) => {
-            // Avoid duplicates
             if (prev.find((t) => t.sid === track.sid)) return prev;
             return [
                 ...prev,
                 {
                     sid: track.sid,
-                    videoTrack: track.kind === "video" ? track : null,
-                    audioTrack: track.kind === "audio" ? track : null,
+                    videoTrack: track,
+                    audioTrack: null,
                     participantIdentity: identity,
                 },
             ];
@@ -194,38 +160,31 @@ export default function CallScreen() {
 
     function setupRoomListeners(room: Room) {
         room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
-            log(`Track subscribed: ${track.kind} from ${participant.identity}`);
             if (track.kind === "video") {
                 addRemoteTrack(track, participant.identity);
             }
-            // Audio plays automatically via @livekit/react-native
         });
 
         room.on(RoomEvent.TrackUnsubscribed, (track) => {
-            log(`Track unsubscribed: ${track.sid}`);
             setRemoteTracks((prev) => prev.filter((t) => t.sid !== track.sid));
         });
 
         room.on(RoomEvent.ParticipantDisconnected, (participant) => {
-            log(`Participant left: ${participant.identity}`);
             setRemoteTracks((prev) =>
                 prev.filter((t) => t.participantIdentity !== participant.identity)
             );
         });
 
         room.on(RoomEvent.Disconnected, () => {
-            log("Disconnected from room");
             handleCallEnded();
         });
     }
 
-    // ─── End call ─────────────────────────────────────────────
     async function handleEndCall() {
         try {
             await api.post("/api/call/end-call", { roomID: roomId });
-        } catch (error) {
-            console.error("End call API error:", error);
-        }
+        } catch { }
+
         await cleanup();
         handleCallEnded();
     }
@@ -233,23 +192,18 @@ export default function CallScreen() {
     function handleCallEnded() {
         setStatus("ended");
         setActiveCall(null);
-        if (router.canGoBack()) {
-            router.back();
-        } else {
-            router.replace("/(auth)" as Href);
-        }
+
+        if (router.canGoBack()) router.back();
+        else router.replace("/(auth)" as Href);
     }
 
     async function cleanup() {
         try {
             if (roomRef.current) {
-                // Stop local tracks
                 const localParticipant = roomRef.current.localParticipant;
                 if (localParticipant) {
                     localParticipant.trackPublications.forEach((pub) => {
-                        if (pub.track) {
-                            pub.track.stop();
-                        }
+                        pub.track?.stop();
                     });
                 }
 
@@ -259,13 +213,9 @@ export default function CallScreen() {
 
             setLocalTrack(null);
             setRemoteTracks([]);
-            log("Cleanup complete");
-        } catch (e) {
-            console.error("Cleanup error:", e);
-        }
+        } catch { }
     }
 
-    // ─── Render ───────────────────────────────────────────────
     if (status === "waiting") {
         return (
             <SafeAreaView style={styles.container}>
@@ -274,10 +224,10 @@ export default function CallScreen() {
                     <Text style={styles.waitingText}>
                         Ringing… waiting for the other user to answer
                     </Text>
+
                     <TouchableOpacity
                         style={styles.cancelButton}
                         onPress={handleEndCall}
-                        activeOpacity={0.8}
                     >
                         <Text style={styles.cancelButtonText}>Cancel Call</Text>
                     </TouchableOpacity>
@@ -299,13 +249,12 @@ export default function CallScreen() {
 
     return (
         <SafeAreaView style={styles.container}>
-            {/* Remote Video (full screen background) */}
             <View style={styles.remoteVideoContainer}>
                 {remoteTracks.length > 0 && remoteTracks[0].videoTrack ? (
                     <VideoView
                         style={styles.remoteVideo}
                         videoTrack={remoteTracks[0].videoTrack}
-                        objectFit="cover"
+                        objectFit="contain"
                     />
                 ) : (
                     <View style={styles.noRemoteVideo}>
@@ -316,9 +265,6 @@ export default function CallScreen() {
                 )}
             </View>
 
-
-
-            {/* Controls */}
             <View style={styles.controlsBar}>
                 <TouchableOpacity
                     style={[styles.muteButton, muted && styles.muteButtonActive]}
@@ -327,14 +273,13 @@ export default function CallScreen() {
                         setMuted(newMuted);
                         roomRef.current?.localParticipant?.setMicrophoneEnabled(!newMuted);
                     }}
-                    activeOpacity={0.8}
                 >
                     <Text style={styles.muteText}>{muted ? "🔇 Unmute" : "🎙️ Mute"}</Text>
                 </TouchableOpacity>
+
                 <TouchableOpacity
                     style={styles.endCallButton}
                     onPress={handleEndCall}
-                    activeOpacity={0.8}
                 >
                     <Text style={styles.endCallText}>❌ End Call</Text>
                 </TouchableOpacity>
@@ -348,18 +293,21 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: "#000",
     },
+
     waitingContainer: {
         flex: 1,
         justifyContent: "center",
         alignItems: "center",
         padding: 40,
     },
+
     waitingText: {
         color: "#fff",
         fontSize: 18,
         marginTop: 20,
         textAlign: "center",
     },
+
     cancelButton: {
         marginTop: 30,
         paddingVertical: 12,
@@ -367,48 +315,33 @@ const styles = StyleSheet.create({
         backgroundColor: "#dc3545",
         borderRadius: 10,
     },
+
     cancelButtonText: {
         color: "#fff",
         fontSize: 16,
         fontWeight: "600",
     },
 
-    // Remote video (full screen)
     remoteVideoContainer: {
         flex: 1,
     },
+
     remoteVideo: {
         flex: 1,
     },
+
     noRemoteVideo: {
         flex: 1,
         justifyContent: "center",
         alignItems: "center",
         backgroundColor: "#1a1a1a",
     },
+
     noRemoteText: {
         color: "#aaa",
         fontSize: 16,
     },
 
-    // Local video (picture-in-picture overlay)
-    localVideoContainer: {
-        position: "absolute",
-        top: 60,
-        right: 16,
-        width: 120,
-        height: 160,
-        borderRadius: 12,
-        overflow: "hidden",
-        borderWidth: 2,
-        borderColor: "#fff",
-        elevation: 5,
-    },
-    localVideo: {
-        flex: 1,
-    },
-
-    // Controls
     controlsBar: {
         position: "absolute",
         bottom: 40,
@@ -419,26 +352,31 @@ const styles = StyleSheet.create({
         alignItems: "center",
         gap: 16,
     },
+
     muteButton: {
         paddingVertical: 14,
         paddingHorizontal: 24,
         backgroundColor: "#555",
         borderRadius: 30,
     },
+
     muteButtonActive: {
         backgroundColor: "#ffc107",
     },
+
     muteText: {
         color: "#fff",
         fontSize: 16,
         fontWeight: "700",
     },
+
     endCallButton: {
         paddingVertical: 14,
         paddingHorizontal: 40,
         backgroundColor: "#dc3545",
         borderRadius: 30,
     },
+
     endCallText: {
         color: "#fff",
         fontSize: 18,

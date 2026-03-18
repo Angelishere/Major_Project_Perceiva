@@ -32,6 +32,7 @@ from pathlib import Path
 import asyncio
 import numpy as np
 import threading
+from libcamera import Transform
 
 try:
     import pyaudio
@@ -71,6 +72,7 @@ PI_INTENT_ENDPOINT = f"{SERVER_URL}/pi_intent"
 MEDICAL_CHECK_ENDPOINT = f"{SERVER_URL}/medical-check"
 PRODUCT_IDENTIFICATION_ENDPOINT = f"{SERVER_URL}/identify-product"
 SCENE_DESCRIPTION_ENDPOINT = f"{SERVER_URL}/describe-scene"
+PRICE_COMPARISON_ENDPOINT = f"{SERVER_URL}/compare"
 FASTAPI_URL = "https://chanel-confirmed-overprotectively.ngrok-free.dev"  # FastAPI STT/TTS service
 AUTH_TOKEN = None  # Set at runtime via login
 
@@ -836,6 +838,77 @@ def send_image_to_scene_description(image_path: str) -> bytes:
         return None
 
 
+def send_image_to_price_comparison(image_path: str) -> bytes:
+    """
+    Send image to /compare endpoint and receive price comparison advice,
+    then convert to audio via FastAPI TTS.
+
+    Args:
+        image_path: Path to the image file
+
+    Returns:
+        Audio bytes (WAV) or None on failure
+    """
+    if not AUTH_TOKEN:
+        print("[PriceCompare] ERROR: No AUTH_TOKEN set")
+        return None
+
+    print(f"[PriceCompare] Processing image: {image_path}")
+
+    try:
+        with open(image_path, "rb") as img_file:
+            files = {
+                "image": ("product.jpg", img_file, "image/jpeg")
+            }
+            
+            print("[PriceCompare] Sending to server...")
+            response = requests.post(
+                PRICE_COMPARISON_ENDPOINT,
+                files=files,
+                timeout=45
+            )
+
+            if response.status_code != 200:
+                print(f"[PriceCompare] Error: HTTP {response.status_code}")
+                try:
+                    print(f"[PriceCompare] Error details: {response.json()}")
+                except:
+                    print(f"[PriceCompare] Response: {response.text[:200]}")
+                return None
+
+            # Parse response JSON
+            result = response.json()
+            advice = result.get("advice", "")
+            
+            print("[PriceCompare] Success!")
+            print(f"  - Advice: {advice}")
+
+            if not advice:
+                print("[PriceCompare] No advice received")
+                return None
+
+            # Convert to audio
+            TTS_API = f"{FASTAPI_URL}/tts"
+            print("[PriceCompare] Converting result to audio...")
+
+            tts_response = requests.post(
+                TTS_API,
+                json={"text": advice},
+                timeout=30
+            )
+
+            if tts_response.status_code != 200:
+                print(f"[PriceCompare] TTS failed: HTTP {tts_response.status_code}")
+                return None
+
+            print(f"[PriceCompare] TTS audio received: {len(tts_response.content)} bytes")
+            return tts_response.content
+
+    except Exception as e:
+        print(f"[PriceCompare] Exception: {e}")
+        return None
+
+
 # =============================================================================
 # Video Call Functions
 # =============================================================================
@@ -1020,7 +1093,8 @@ async def initiate_video_call():
         print("[VideoCall] Initializing camera...")
         picam = Picamera2()
         config = picam.create_preview_configuration(
-            main={"size": (VIDEO_WIDTH, VIDEO_HEIGHT), "format": "XBGR8888"}
+            main={"size": (VIDEO_WIDTH, VIDEO_HEIGHT), "format": "XBGR8888"},
+            transform=Transform(hflip=1, vflip=1)
         )
         config["buffer_count"] = 3
         picam.configure(config)
@@ -1492,6 +1566,27 @@ def process_single_interaction():
             
             if audio_response is None:
                 print("[Workflow] Product finding failed")
+                return False
+
+        elif action_command == "CAPTURE_PRICE_IMAGE":
+            print("[Workflow] Price comparison requested")
+            
+            # Create temp file for image
+            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_img:
+                image_path = tmp_img.name
+            
+            # Capture image
+            print("[Workflow] Capturing product image for price comparison...")
+            if not capture_image(image_path):
+                print("[Workflow] Image capture failed")
+                return False
+            
+            # Send image to compare endpoint
+            print("[Workflow] Sending image for price analysis...")
+            audio_response = send_image_to_price_comparison(image_path)
+            
+            if audio_response is None:
+                print("[Workflow] Price comparison failed")
                 return False
 
         elif action_command == "INITIATE_VIDEO_CALL":

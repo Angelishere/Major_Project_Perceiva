@@ -875,8 +875,288 @@ Be friendly and supportive.`;
 })
 
 
+async function amazonSearch(keyword) {
 
+  const url = `https://${process.env.RAPIDAPI_HOST}/product-search`;
 
+  const resp = await axios.get(url, {
+    params: {
+      keyword,
+      country: "in",
+      page: "1"
+    },
+    headers: {
+      "x-rapidapi-key": process.env.RAPIDAPI_KEY,
+      "x-rapidapi-host": process.env.RAPIDAPI_HOST
+    }
+  });
+
+  const data = resp.data;
+
+  let items = [];
+  for (const key of ["products", "items", "data", "results", "details"]) {
+    if (Array.isArray(data[key])) {
+      items = data[key];
+      break;
+    }
+  }
+
+  const results = [];
+
+  for (const p of items) {
+
+    const title = p.title || p.name || p.ProductTitle;
+    const link = p.link || p.url || p.productUrl;
+
+    let price = null;
+
+    if (typeof p.price === "string" || typeof p.price === "number") {
+      price = p.price;
+    }
+    else if (typeof p.price === "object" && p.price) {
+      price = p.price.value || p.price.raw;
+    }
+
+    const image =
+      p.productImage ||
+      p.image ||
+      p.thumbnail ||
+      p.imageUrl ||
+      null;
+
+    if (!title || !price) continue;
+
+    const clean = parseFloat(String(price).replace(/[₹,]/g, ""));
+
+    if (isNaN(clean)) continue;
+
+    results.push({
+      site: "Amazon",
+      title,
+      price: clean,
+      url: link,
+      image
+    });
+  }
+
+  return results;
+}
+
+async function googleShoppingSearch(query) {
+
+  const resp = await axios.get("https://serpapi.com/search.json", {
+    params: {
+      engine: "google_shopping",
+      q: query,
+      gl: "in",
+      hl: "en",
+      api_key: process.env.SERPAPI_KEY
+    }
+  });
+
+  const data = resp.data;
+
+  const items = Array.isArray(data.shopping_results)
+    ? data.shopping_results
+    : [];
+
+  const ALLOWED_SITES = [
+    "amazon",
+    "amazon fresh",
+    "flipkart",
+    "jiomart",
+    "zepto",
+    "blinkit",
+    "instamart",
+    "swiggy",
+    "bigbasket",
+    "dunzo",
+    "dmart",
+    "reliance",
+    "more"
+  ];
+
+  const SITE_PRIORITY = [
+    "blinkit",
+    "zepto",
+    "instamart",
+    "swiggy",
+    "amazon fresh",
+    "amazon",
+    "jiomart",
+    "bigbasket",
+    "dunzo",
+    "dmart",
+    "reliance",
+    "more",
+    "flipkart"
+  ];
+
+  const results = [];
+
+  for (const p of items) {
+
+    const title = p.title;
+    const priceText = p.price;
+
+    const link = p.product_link || p.offer_link;
+    if (!link) continue;
+
+    const image = p.thumbnail || p.image || null;
+
+    const sourceText = ((p.source || "") + " " + link).toLowerCase();
+
+    const allowed = ALLOWED_SITES.some(site =>
+      sourceText.includes(site)
+    );
+
+    if (!allowed) continue;
+
+    if (!title || !priceText) continue;
+
+    const clean = parseFloat(priceText.replace(/[₹,]/g, ""));
+    if (isNaN(clean)) continue;
+
+    const priorityIndex = SITE_PRIORITY.findIndex(site =>
+      sourceText.includes(site)
+    );
+
+    const priority =
+      priorityIndex === -1 ? SITE_PRIORITY.length : priorityIndex;
+
+    results.push({
+      site: p.source || "Google Shopping",
+      title,
+      price: clean,
+      url: link,
+      image,
+      priority
+    });
+  }
+
+  return results;
+}
+
+async function summarizeBestDeal(productName, results) {
+
+  if (!results.length) {
+    return "I could not find reliable price information for this product.";
+  }
+
+const top = results.slice(0, 8)
+  .map(r => `${r.title} - ${r.site} ₹${r.price}`)
+  .join("\n");
+
+const prompt = `
+You are helping a visually impaired user find the cheapest place to buy a product.
+
+Product: ${productName}
+
+Listings:
+${top}
+
+Rules:
+- Products may have different quantities or pack sizes.
+- Compare only listings with the same quantity.
+- Mention the cheapest store for each quantity.
+- Ignore flavour variants, combos, or unrelated products.
+- Reply in 1 or 2 short sentences only.
+- Maximum 30 words.
+- Plain spoken English for text to speech.
+- No bullet points, no symbols, no markdown.
+`;
+
+  try {
+
+    const response = await gemini.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt
+    });
+
+    return (response.text || "").trim();
+
+  } catch (err) {
+
+    console.error("Gemini compare error:", err.message);
+    return "I found prices but could not determine the best deal.";
+  }
+}
+
+app.post("/compare", upload.single("image"), async (req, res) => {
+
+  try {
+
+    if (!req.file) {
+      return res.status(400).json({
+        message: "Image required"
+      });
+    }
+
+    // identify product
+    const productName = await identifyProductWithGPT(
+      req.file.buffer,
+      req.file.mimetype || "image/jpeg"
+    );
+
+    if (!productName) {
+      return res.status(502).json({
+        message: "Could not identify product"
+      });
+    }
+
+    console.log("[COMPARE] Product:", productName);
+
+    // fetch prices in parallel
+    const [amazon, google] = await Promise.all([
+      amazonSearch(productName),
+      googleShoppingSearch(productName)
+    ]);
+
+    const results = amazon
+      .concat(google)
+      .filter(r => r.price !== null)
+      .sort((a, b) => {
+
+        const aPriority =
+          Number.isFinite(a.priority) ? a.priority : 999;
+
+        const bPriority =
+          Number.isFinite(b.priority) ? b.priority : 999;
+
+        if (aPriority !== bPriority) {
+          return aPriority - bPriority;
+        }
+
+        return a.price - b.price;
+      });
+
+    if (!results.length) {
+      return res.status(404).json({
+        message: "No price data found",
+        product_name: productName
+      });
+    }
+
+    const advice = await summarizeBestDeal(productName, results);
+
+    return res.status(200).json({
+      message: "Price comparison completed",
+      product_name: productName,
+      advice,
+      });
+
+  } catch (error) {
+
+    console.error("Compare error:", error);
+
+    return res.status(500).json({
+      message: "Comparison failed",
+      error: error.message
+    });
+
+  }
+
+});
 
 const port = process.env.PORT || 4000;
 app.listen(port, () => {
