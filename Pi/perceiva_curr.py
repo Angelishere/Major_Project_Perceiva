@@ -421,7 +421,8 @@ def init_still_camera():
         print("[Camera] Pre-initializing still camera...")
         cam = Picamera2()
         config = cam.create_still_configuration(
-            main={"size": (1024, 768)}
+            main={"size": (1024, 768)},
+            transform=Transform(hflip=1, vflip=1)
         )
         cam.configure(config)
         cam.start()
@@ -506,7 +507,8 @@ def capture_image(output_path: str) -> bool:
         print("[Camera] Initializing camera...")
         picam = Picamera2()
         config = picam.create_still_configuration(
-            main={"size": (1024, 768)}
+            main={"size": (1024, 768)},
+            transform=Transform(hflip=1, vflip=1)
         )
         picam.configure(config)
         print("[Camera] Starting camera...")
