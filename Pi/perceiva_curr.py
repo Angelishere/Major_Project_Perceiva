@@ -639,83 +639,99 @@ def send_image_to_medical_check(image_path: str) -> bytes:
 
 def send_image_to_currency_recognition(image_path: str) -> bytes:
     """
-    Send captured image to currency recognition API and get TTS audio response.
-    
+    Identify the currency note in the image using GPT-4.1-mini Vision,
+    then play a local audio file for that denomination (or TTS as fallback).
+
     Args:
         image_path: Path to the captured image
-    
+
     Returns:
-        Audio bytes from TTS or None on failure
+        b"LOCAL_PLAYBACK_DONE" on success (local audio played), or TTS bytes,
+        or None on failure
     """
-    print(f"[CurrencyRecognition] Processing image: {image_path}")
-    
-    # API endpoints
-    CURRENCY_API = "https://chanel-confirmed-overprotectively.ngrok-free.dev/currency-recognition"
-    TTS_API = "https://chanel-confirmed-overprotectively.ngrok-free.dev/tts"
-    
+    import base64
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        print("[CurrencyRecognition] ERROR: OPENAI_API_KEY not set in environment")
+        play_audio_file("Interaction_fail.wav")
+        return None
+
+    print(f"[CurrencyRecognition] Identifying currency in: {image_path}")
+
     try:
-        # Step 1: Send image to currency recognition
-        print("[CurrencyRecognition] Sending image to currency API...")
-        
-        with open(image_path, 'rb') as img_file:
-            files = {
-                'file': ('currency.jpg', img_file, 'image/jpeg')
-            }
-            
-            response = requests.post(
-                CURRENCY_API,
-                files=files,
-                timeout=30
-            )
-        
-        if response.status_code != 200:
-            print(f"[CurrencyRecognition] Currency API Error: HTTP {response.status_code}")
-            try:
-                print(f"[CurrencyRecognition] Error: {response.json()}")
-            except:
-                print(f"[CurrencyRecognition] Error: {response.text[:200]}")
+        # Read and base64-encode the image (same approach as Server/index.js)
+        with open(image_path, "rb") as f:
+            image_bytes = f.read()
+        base64_image = base64.b64encode(image_bytes).decode("utf-8")
+        mime_type = "image/jpeg"
+
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key)
+
+        prompt = (
+            "Look at this Indian currency note. "
+            "Identify the denomination (e.g. 10, 20, 50, 100, 200, 500, 2000). "
+            "Reply with ONLY the number, nothing else."
+        )
+
+        print("[CurrencyRecognition] Sending image to GPT-4.1-mini...")
+        resp = client.responses.create(
+            model="gpt-4.1-mini",
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": prompt},
+                        {
+                            "type": "input_image",
+                            "image_url": f"data:{mime_type};base64,{base64_image}"
+                        }
+                    ]
+                }
+            ]
+        )
+
+        raw = (resp.output_text or "").strip()
+        print(f"[CurrencyRecognition] GPT raw response: '{raw}'")
+
+        # Extract just the numeric denomination — handles "₹100", "100 rupees", "Rs. 500" etc.
+        import re
+        match = re.search(r'\b(10|20|50|100|200|500|2000)\b', raw)
+        if not match:
+            print(f"[CurrencyRecognition] Could not extract denomination from: '{raw}'")
+            play_audio_file("Interaction_fail.wav")
             return None
-        
-        # Parse currency prediction
-        result = response.json()
-        
-        if not result.get('ok'):
-            print("[CurrencyRecognition] Currency recognition failed")
-            return None
-        
-        prediction = result.get('prediction', 'unknown')
-        confidence = result.get('confidence', 0)
-        
-        print(f"[CurrencyRecognition] Detected currency: ₹{prediction}")
-        print(f"[CurrencyRecognition] Confidence: {confidence:.2%}")
-        
-        print(f"[CurrencyRecognition] Detected currency: ₹{prediction}")
-        print(f"[CurrencyRecognition] Confidence: {confidence:.2%}")
-        
-        # Step 2: Play local audio file for currency
-        # Expected files: "10.wav", "20.wav", "50.wav", "100.wav", "200.wav", "500.wav"
+
+        prediction = match.group(1)
+        print(f"[CurrencyRecognition] Identified denomination: ₹{prediction}")
+
+        # Try to play a local audio file for the denomination (e.g. "100.wav")
         currency_audio_file = f"{prediction}.wav"
-        
-        print(f"[CurrencyRecognition] Playing local audio: {currency_audio_file}")
-        play_audio_file(currency_audio_file)
-        
-        # Return dummy bytes to signal success (since we handled playback locally)
-        return b"LOCAL_PLAYBACK_DONE"
-        
-    except requests.exceptions.Timeout:
-        print("[CurrencyRecognition] Request timed out")
-        play_audio_file("Interaction_fail.wav")
-        return None
-    except requests.exceptions.ConnectionError:
-        print("[CurrencyRecognition] Connection error - is the ngrok tunnel running?")
-        play_audio_file("Interaction_fail.wav")
-        return None
+        local_path = os.path.join(AUDIO_DIR, currency_audio_file)
+
+        if os.path.exists(local_path):
+            print(f"[CurrencyRecognition] Playing local audio: {currency_audio_file}")
+            play_audio_file(currency_audio_file)
+            return b"LOCAL_PLAYBACK_DONE"
+
+        # Fallback: TTS via FastAPI
+        print(f"[CurrencyRecognition] No local file for '{prediction}', using TTS...")
+        tts_text = f"This is a {prediction} rupee note."
+        tts_resp = requests.post(
+            f"{FASTAPI_URL}/tts",
+            json={"text": tts_text},
+            timeout=30
+        )
+        if tts_resp.status_code != 200:
+            print(f"[CurrencyRecognition] TTS failed: HTTP {tts_resp.status_code}")
+            return None
+
+        return tts_resp.content
+
     except Exception as e:
         print(f"[CurrencyRecognition] Exception: {e}")
         play_audio_file("Interaction_fail.wav")
-        return None
-    except Exception as e:
-        print(f"[CurrencyRecognition] Exception: {e}")
         return None
 
 
@@ -1665,7 +1681,8 @@ def process_single_interaction():
             return True
 
         # ── Step 5: Play response audio ──
-        if audio_response:
+        # LOCAL_PLAYBACK_DONE sentinel means audio was already played inside the handler
+        if audio_response and audio_response != b"LOCAL_PLAYBACK_DONE":
             success = play_audio_pulseaudio(audio_response)
             if not success:
                 print("[Workflow] Playback failed")

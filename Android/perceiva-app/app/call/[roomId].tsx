@@ -173,6 +173,8 @@ export default function CallScreen() {
             setRemoteTracks((prev) =>
                 prev.filter((t) => t.participantIdentity !== participant.identity)
             );
+            // Other side disconnected — end the call on this side too
+            handleEndCall();
         });
 
         room.on(RoomEvent.Disconnected, () => {
