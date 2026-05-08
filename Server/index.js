@@ -278,12 +278,14 @@ Analyze this user speech and respond with ONLY the exact module name from the li
 User said: "${transcribedText}"`;
 
   try {
-    const intentResponse = await gemini.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: intentPrompt
+    const intentResponse = await openai.chat.completions.create({
+      model: "gpt-4.1-mini",
+      messages: [{ role: "user", content: intentPrompt }],
+      max_tokens: 20,
+      temperature: 0
     });
 
-    return (intentResponse.text || "AI Assistance Module").trim();
+    return (intentResponse.choices[0]?.message?.content || "AI Assistance Module").trim();
   } catch (error) {
     console.error("[identifyUserIntent] Error:", error.message);
     return "AI Assistance Module";
@@ -813,20 +815,21 @@ app.post("/pi_intent", authMiddleware, async (req, res) => {
     if (actionCommand === "AI_CONVERSATION") {
       console.log("[pi_intent] AI conversation mode - generating response");
 
-      const geminiPrompt = `You are a helpful AI assistant for a visually impaired user.
+      const geminiPrompt = `You are a helpful AI assistant named Perceiva for a visually impaired user.
 The user asked: "${transcribedText}"
 
-Respond in a clear, concise, and conversational manner. Keep your response short but helpful.
+Respond in a clear, concise, and conversational manner. Keep your response short and make sure that the response is tts friendly, but helpful.
 Be friendly and supportive.`;
 
       try {
-        const geminiResponse = await gemini.models.generateContent({
-          model: "gemini-2.5-flash",
-          contents: geminiPrompt
+        const aiCompletion = await openai.chat.completions.create({
+          model: "gpt-4.1-mini",
+          messages: [{ role: "user", content: geminiPrompt }],
+
         });
 
-        const aiResponse = geminiResponse.text || "I'm here to help. Could you please repeat your question?";
-        console.log("[pi_intent] Gemini response:", aiResponse);
+        const aiResponse = aiCompletion.choices[0]?.message?.content || "I'm here to help. Could you please repeat your question?";
+        console.log("[pi_intent] OpenAI response:", aiResponse);
 
         return res.status(200).json({
           message: "AI conversation response",

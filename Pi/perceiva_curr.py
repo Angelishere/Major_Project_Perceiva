@@ -67,7 +67,7 @@ except ImportError:
 # =============================================================================
 
 # Server Configuration
-SERVER_URL = "http://192.168.229.134:4000"
+SERVER_URL = "http://192.168.111.134:4000"
 PI_INTENT_ENDPOINT = f"{SERVER_URL}/pi_intent"
 MEDICAL_CHECK_ENDPOINT = f"{SERVER_URL}/medical-check"
 PRODUCT_IDENTIFICATION_ENDPOINT = f"{SERVER_URL}/identify-product"
